@@ -29,7 +29,7 @@ The package brings dbt's way of working to Laravel. Each model is one SELECT, th
 
 ### 2. Define analytics models
 
-Generate with `php artisan make:analytics Revenue`. Models live in `app/Analytics`, extend `Illuminate\Database\Eloquent\Model`, implement `Eznix86\LaravelAnalytics\Contracts\AnalyticsModel`, and use `Eznix86\LaravelAnalytics\Concerns\Analytics`.
+Generate with `php artisan make:analytics Revenue`. The stub is a fluent `Query`; replace the example source model with your own. Models live in `app/Analytics`, extend `Illuminate\Database\Eloquent\Model`, implement `Eznix86\LaravelAnalytics\Contracts\AnalyticsModel`, and use `Eznix86\LaravelAnalytics\Concerns\Analytics`.
 
 ```php
 use Eznix86\LaravelAnalytics\Query;
