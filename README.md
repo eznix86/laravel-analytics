@@ -524,6 +524,53 @@ where it is defined.
 
 The joins those rollups share belong in one wide model they all `ref()`. That resolves the join graph once at build time; the package does not plan joins per query the way a semantic layer such as Cube or dbt's MetricFlow does, so pick the dimension combinations you want and materialize them.
 
+## Fluent models
+
+`computes()` also accepts a `Query`, which writes the `group by` for you:
+
+```php
+public function computes(): Query
+{
+    return $this->from(AdjustedJournalEntries::class, 'j')
+        ->join(StgAccount::class, 'a', 'a.account_id', 'j.account_id')
+        ->per('a.account_code', 'a.account_name', 'a.account_type')
+        ->measure('total_debit', 'sum(j.debit)')
+        ->measure('balance', 'sum(j.adjusted_amount)');
+}
+```
+
+`per()` declares a dimension: it is selected *and* grouped by, so the expression is written once
+instead of once per clause. `measure()` declares an aggregate, which is selected and not grouped.
+`grain()` groups by an expression that is never selected, for a rollup whose output columns differ
+from what it is grouped by:
+
+```php
+->grain(date_trunc('day', 't.created_at'))
+->measure('created_at', 'min(t.created_at)')
+->measure('total', 'count(*)')
+```
+
+A grouped query refuses `select()`. A column that is neither grouped nor aggregated is rejected by
+PostgreSQL and MySQL and silently given an arbitrary row's value by SQLite, so the API does not
+offer the combination — plain columns go in `per()`, aggregates in `measure()`.
+
+Ungrouped models use `select()`, which is also where a window function goes:
+
+```php
+return $this->from(TransByStoreDay::class, 'd')
+    ->select('d.created_at_day', 'd.store_id', 'd.total_transactions',
+        raw('sum(d.total_transactions) over (partition by d.store_id '
+            .'order by d.created_at_day rows between 29 preceding and current row)')->as('transactions_30_day'));
+```
+
+The rest of the surface: `join()` / `leftJoin()` with `on()` for a second condition, `where()` (which
+binds its value) and `whereRaw()`, `orderBy()`, `limit()`, and `pipe()` for a shared fragment. Passing
+a model class rather than a table name is what registers the dependency, so a fluent model cannot
+forget `ref()`.
+
+A `Query` is immutable: every method returns a new query, so a shared base can be handed to several
+models without one of them altering it.
+
 ## Builder-backed models
 
 `computes()` also accepts a query builder, which is portable for free and reads well for staging models:

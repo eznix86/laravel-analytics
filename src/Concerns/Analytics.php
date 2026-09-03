@@ -20,6 +20,7 @@ use Eznix86\LaravelAnalytics\Grammars\GrammarManager;
 use Eznix86\LaravelAnalytics\IncrementalStrategy;
 use Eznix86\LaravelAnalytics\Materialization;
 use Eznix86\LaravelAnalytics\Models\AnalyticsRun;
+use Eznix86\LaravelAnalytics\Query;
 use Eznix86\LaravelAnalytics\RunStatus;
 use Eznix86\LaravelAnalytics\SchemaChange;
 use Eznix86\LaravelAnalytics\Testing\Expectation;
@@ -37,7 +38,7 @@ trait Analytics
     /**
      * The SQL this model is built from.
      */
-    abstract public function computes(): string|Builder;
+    abstract public function computes(): string|Builder|Query;
 
     public function materialization(): Materialization
     {
@@ -272,6 +273,14 @@ trait Analytics
     public function usingCompilationContext(?Context $context): void
     {
         $this->analyticsContext = $context;
+    }
+
+    /**
+     * @param  class-string<Model>  $model
+     */
+    protected function from(string $model, ?string $alias = null): Query
+    {
+        return Query::from($model, $alias);
     }
 
     /**

@@ -17,4 +17,14 @@ final class Aliased extends Expression
     {
         return $this->expression->render($grammar).' as '.$this->alias;
     }
+
+    public function expression(): Expression
+    {
+        return $this->expression;
+    }
+
+    public function alias(): string
+    {
+        return $this->alias;
+    }
 }

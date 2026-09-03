@@ -10,6 +10,7 @@ use Eznix86\LaravelAnalytics\Compilation\Context;
 use Eznix86\LaravelAnalytics\Grammars\Grammar;
 use Eznix86\LaravelAnalytics\IncrementalStrategy;
 use Eznix86\LaravelAnalytics\Materialization;
+use Eznix86\LaravelAnalytics\Query;
 use Eznix86\LaravelAnalytics\SchemaChange;
 use Eznix86\LaravelAnalytics\Testing\Expectation;
 use Illuminate\Contracts\Database\Query\Builder;
@@ -19,7 +20,7 @@ interface AnalyticsModel
     /**
      * The SQL this model is built from.
      */
-    public function computes(): string|Builder;
+    public function computes(): string|Builder|Query;
 
     public function materialization(): Materialization;
 

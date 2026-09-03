@@ -4,6 +4,7 @@
 
 ### Added
 
+- A fluent `Query` accepted by `computes()`, which derives `group by` from `per()` and `grain()`, binds `where()` values, registers dependencies from the model class passed to `from()` and `join()`, and refuses `select()` on a grouped query. Immutable: every method returns a new query.
 - `Analytics` trait and `AnalyticsModel` contract for defining analytics models as Eloquent models.
 - `ref()` dependency resolution that distinguishes analytics models from plain Eloquent sources.
 - `table`, `view` and `ephemeral` materializations, with ephemeral models inlined as CTEs.

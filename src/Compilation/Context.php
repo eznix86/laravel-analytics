@@ -7,6 +7,7 @@ namespace Eznix86\LaravelAnalytics\Compilation;
 use Eznix86\LaravelAnalytics\Contracts\AnalyticsModel;
 use Eznix86\LaravelAnalytics\Exceptions\CircularDependency;
 use Eznix86\LaravelAnalytics\Materialization;
+use Eznix86\LaravelAnalytics\Query;
 use Illuminate\Contracts\Database\Query\Builder;
 use Illuminate\Database\Eloquent\Model;
 
@@ -102,6 +103,16 @@ class Context
             $computed = $model->computes();
         } finally {
             $model->usingCompilationContext(null);
+        }
+
+        if ($computed instanceof Query) {
+            $compiled = $computed->compile($this, $model->grammar());
+
+            foreach ($compiled->bindings as $binding) {
+                $this->bindings[] = $binding;
+            }
+
+            return trim($compiled->sql);
         }
 
         if ($computed instanceof Builder) {
