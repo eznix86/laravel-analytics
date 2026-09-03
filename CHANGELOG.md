@@ -1,10 +1,17 @@
 # Release Notes
 
-## [Unreleased](https://github.com/eznix86/laravel-analytics/compare/v0.1.0...1.x)
+## [Unreleased](https://github.com/eznix86/laravel-analytics/compare/v0.2.0...1.x)
+
+## [v0.2.0](https://github.com/eznix86/laravel-analytics/compare/v0.1.0...v0.2.0) - 2026-09-04
 
 ### Added
 
 - `ImportQuery` and `Materialization::Import`, copying rows from the connection a source lives on onto the model's own connection, in chunks, upserted on a replace key, with `appendOnly:` reading only past the highest value already stored. Rows are streamed, with MySQL's result buffering turned off for the read, so memory is the size of a chunk rather than the size of the source. The target table is never created, so its column types stay the ones you migrated. Refuses a missing target, a target with no unique index on the replace key, an import with no replace key, and a source that is an analytics model on the other connection.
+
+## [v0.1.0](https://github.com/eznix86/laravel-analytics/releases/tag/v0.1.0) - 2026-09-03
+
+### Added
+
 - `ViewQuery`, `EphemeralQuery`, `IncrementalQuery`, `MicrobatchQuery` and `SnapshotQuery`. The declared return type of `computes()` is the materialization, and each subclass carries the configuration that materialization needs — `replacing`/`since`, event time and batch size, tracked and watched columns — so a fluent model overrides neither `materialization()` nor `uniqueKey()`, `eventTime()`, `batchSize()`, `begin()` or `checkColumns()`, and a setting that belongs to another materialization does not exist on the query at all.
 - `since()` and `whenIncremental()` on a fluent query, restricting an incremental run without the model writing the filter twice; `since()` compares with `>` when the model appends and `>=` when it replaces by key, and compares the dimension expression rather than its alias. A microbatch model is narrowed to the batch being built automatically, from `eventTime()`.
 - A fluent `Query` accepted by `computes()`, which derives `group by` from `per()` and `grain()`, binds `where()` values, registers dependencies from the model class passed to `from()` and `join()`, and refuses `select()` on a grouped query. Immutable: every method returns a new query.
@@ -34,7 +41,3 @@
 - A model's compilation context now stays set while its fluent query compiles. It was cleared as soon as `computes()` returned, so `isIncremental()` could not see a `--full-refresh` and a fluent incremental model kept its high water mark filter, rebuilding nothing.
 - `analytics:test` reports a model whose relation has not been built yet and exits non-zero, instead of surfacing the driver's `relation does not exist` error. Views count as built, which `hasTable()` alone does not report on any driver.
 - Renamed the package from `eznix86/laravel-dbt` to `eznix86/laravel-analytics`, and the namespace from `Eznix86\LaravelDBT` to `Eznix86\LaravelAnalytics`.
-
-## [v0.1.0](https://github.com/eznix86/laravel-analytics/compare/...v0.1.0) - 202x-xx-xx
-
-Initial pre-release.
