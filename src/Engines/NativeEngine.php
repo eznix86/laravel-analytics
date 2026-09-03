@@ -170,17 +170,17 @@ class NativeEngine
 
         $sql = $node->compiled->sql;
         $bindings = $node->compiled->bindings;
-        $watermark = $node->appending ? $model->watermark() : null;
+        $appendOnly = $node->appending ? $model->appendOnlyColumn() : null;
 
-        if ($watermark !== null) {
+        if ($appendOnly !== null) {
             $high = $target->selectOne(sprintf(
                 'select max(%s) as high from %s',
-                $watermark,
+                $appendOnly,
                 $this->physical($target, $table),
             ))?->high;
 
             if ($high !== null) {
-                $sql = sprintf('select * from (%s) as import_source where %s > ?', $sql, $watermark);
+                $sql = sprintf('select * from (%s) as import_source where %s > ?', $sql, $appendOnly);
                 $bindings[] = $high;
             }
         }

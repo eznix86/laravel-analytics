@@ -19,6 +19,6 @@ class ImportedEvents extends Model implements AnalyticsModel
     {
         return $this->from(RemoteEvent::class)
             ->select('id', 'name', 'happened_at')
-            ->import(replacing: ['id'], since: 'id', chunk: 2);
+            ->import(replacing: ['id'], appendOnly: 'id', chunk: 2);
     }
 }

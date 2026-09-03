@@ -76,7 +76,7 @@ interface AnalyticsModel
     /**
      * The column an import reads past on a later run.
      */
-    public function watermark(): ?string;
+    public function appendOnlyColumn(): ?string;
 
     /**
      * How many rows an import buffers before writing them.

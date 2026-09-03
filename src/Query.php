@@ -249,11 +249,11 @@ class Query
      * Copy rows from the connection the source lives on onto this model's connection.
      *
      * @param  list<string>  $replacing  Columns identifying a row, so a rerun replaces rather than doubles.
-     * @param  string|null  $since  Column whose high water mark bounds the read.
+     * @param  string|null  $appendOnly  Column to read past, for a source that never deletes or restates a row.
      */
-    public function import(array $replacing, ?string $since = null, int $chunk = 1000): ImportQuery
+    public function import(array $replacing, ?string $appendOnly = null, int $chunk = 1000): ImportQuery
     {
-        return $this->becomes(ImportQuery::class)->copying($replacing, $since, $chunk);
+        return $this->becomes(ImportQuery::class)->copying($replacing, $appendOnly, $chunk);
     }
 
     public function view(): ViewQuery

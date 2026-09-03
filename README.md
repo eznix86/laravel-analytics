@@ -187,7 +187,7 @@ configuration that materialization needs:
 | `IncrementalQuery` | every row, topped up | `->incremental(replacing:, since:)` |
 | `MicrobatchQuery` | every row, rebuilt one time slice at a time | `->microbatch($eventTime, $size, begin:)` |
 | `SnapshotQuery` | one row per version, `valid_from` / `valid_to` | `->snapshot(trackedBy:, whenChanged:)` |
-| `ImportQuery` | rows copied from another connection | `->import(replacing:, since:)` |
+| `ImportQuery` | rows copied from another connection | `->import(replacing:, appendOnly:)` |
 
 A setting from another materialization is not on the query at all. You cannot call `since()` on a
 table query, or `whenChanged()` on an incremental one. A wrong combination fails to compile instead
@@ -353,23 +353,25 @@ class ImportedEvents extends Model implements AnalyticsModel
     {
         return $this->from(Event::class)    // Event lives on the warehouse connection
             ->select('id', 'name', 'happened_at')
-            ->import(replacing: ['id'], since: 'id', chunk: 1000);
+            ->import(replacing: ['id'], appendOnly: 'id', chunk: 1000);
     }
 }
 ```
 
-The rows are read in chunks and upserted, so a rerun replaces rather than doubles. `since:` reads only
-past the highest value already stored, and `--full-refresh` empties the table and reads everything
-again. Downstream models on `pgsql` then reference `ImportedEvents` like any other model.
+The rows are read in chunks and upserted, so a rerun replaces rather than doubles. `appendOnly:` reads
+only past the highest value already stored, and `--full-refresh` empties the table and reads
+everything again. Downstream models on `pgsql` then reference `ImportedEvents` like any other model.
 
-**`since:` only looks forward.** A row deleted at the source stays in the copy, and a row updated
-below the high water mark is not picked up. Neither produces an error, so decide deliberately:
+**`appendOnly:` is a claim about the source, not a setting.** It reads only past the highest value
+already stored, so a row deleted at the source stays in the copy, and a row updated below that value
+is never picked up. Neither produces an error, which is why the parameter is named after the
+assumption you are making:
 
-- leave `since:` off, and every run reads the whole source and upserts it, which catches updates but
-  still not deletes
+- leave `appendOnly:` off, and every run reads the whole source and upserts it, which catches updates
+  but still not deletes
 - schedule a periodic `analytics:sync ImportedEvents --only --full-refresh`, which empties the table
   and reads everything again, which catches both
-- keep `since:` on an append only source, such as an event log, where neither can happen
+- use `appendOnly:` for a source that only ever gains rows, such as an event log
 
 Four things it refuses, each with the fix in the message:
 

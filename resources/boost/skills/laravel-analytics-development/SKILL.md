@@ -77,7 +77,7 @@ The declared return type of `computes()` says how the model is persisted. Set it
 | `IncrementalQuery` | incremental | `->incremental(replacing:, since:)` |
 | `MicrobatchQuery` | microbatch | `->microbatch($eventTime, $size, begin:, lookback:)` |
 | `SnapshotQuery` | snapshot | `->snapshot(trackedBy:, whenChanged:)` |
-| `ImportQuery` | import from another connection | `->import(replacing:, since:, chunk:)` |
+| `ImportQuery` | import from another connection | `->import(replacing:, appendOnly:, chunk:)` |
 
 ```php
 public function computes(): IncrementalQuery
@@ -95,7 +95,7 @@ public function computes(): IncrementalQuery
 - A microbatch model needs no filter. The batch window is applied from its event time column.
 - Neither filter is added on the first build or under `--full-refresh`.
 - Set `onSchemaChange()` when an incremental model's columns will drift.
-- `since:` on an import only looks forward: a row deleted at the source stays in the copy, and a row updated below the high water mark is missed. Use it for append only sources, drop it to catch updates, or schedule `--full-refresh` to catch both.
+- `appendOnly:` on an import is a claim that the source only ever gains rows. It reads past the highest value already stored, so a deleted row stays in the copy and an update below that value is missed. Drop it to catch updates, or schedule `--full-refresh` to catch both.
 - An import copies rows from the connection its source lives on onto the model's own connection, which is the only model allowed to cross a connection. Write a migration for the target table first, with a unique index on the replace key. The import never creates the table, so the column types stay the ones you chose. Its source must be a plain Eloquent model, not an analytics model on the other connection.
 - A model that returns raw SQL keeps `materialization()` and the rest as methods, and writes its own filter with `isIncremental()` and its own batch predicate with `$this->batchWindow()`.
 

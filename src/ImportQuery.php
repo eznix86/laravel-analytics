@@ -18,7 +18,7 @@ class ImportQuery extends Query
      */
     private array $uniqueKey = [];
 
-    private ?string $since = null;
+    private ?string $appendOnly = null;
 
     private int $chunk = 1000;
 
@@ -30,11 +30,11 @@ class ImportQuery extends Query
     /**
      * @param  list<string>  $replacing
      */
-    public function copying(array $replacing, ?string $since, int $chunk): static
+    public function copying(array $replacing, ?string $appendOnly, int $chunk): static
     {
-        return $this->mutate(static function (self $query) use ($replacing, $since, $chunk): void {
+        return $this->mutate(static function (self $query) use ($replacing, $appendOnly, $chunk): void {
             $query->uniqueKey = $replacing;
-            $query->since = $since;
+            $query->appendOnly = $appendOnly;
             $query->chunk = $chunk;
         });
     }
@@ -47,16 +47,20 @@ class ImportQuery extends Query
         return $this->uniqueKey;
     }
 
-    public function since(string $column): static
+    /**
+     * Read only past the highest value already stored. Correct only while the source
+     * never deletes or restates a row, which the package cannot check for you.
+     */
+    public function appendOnly(string $column): static
     {
         return $this->mutate(static function (self $query) use ($column): void {
-            $query->since = $column;
+            $query->appendOnly = $column;
         });
     }
 
-    public function watermarkColumn(): ?string
+    public function appendOnlyColumn(): ?string
     {
-        return $this->since;
+        return $this->appendOnly;
     }
 
     public function chunkSize(): int

@@ -168,11 +168,11 @@ trait Analytics
     /**
      * The column an import reads past, and how many rows it buffers before writing.
      */
-    public function watermark(): ?string
+    public function appendOnlyColumn(): ?string
     {
         $query = $this->analyticsConfiguration();
 
-        return $query instanceof ImportQuery ? $query->watermarkColumn() : null;
+        return $query instanceof ImportQuery ? $query->appendOnlyColumn() : null;
     }
 
     public function importChunk(): int
