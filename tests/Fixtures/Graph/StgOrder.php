@@ -7,6 +7,7 @@ namespace Eznix86\LaravelAnalytics\Tests\Fixtures\Graph;
 use Eznix86\LaravelAnalytics\Concerns\Analytics;
 use Eznix86\LaravelAnalytics\Contracts\AnalyticsModel;
 use Eznix86\LaravelAnalytics\Materialization;
+use Eznix86\LaravelAnalytics\Testing\Expectation;
 use Illuminate\Database\Eloquent\Model;
 
 class StgOrder extends Model implements AnalyticsModel
@@ -16,6 +17,11 @@ class StgOrder extends Model implements AnalyticsModel
     public function materialization(): Materialization
     {
         return Materialization::View;
+    }
+
+    public function expectations(): array
+    {
+        return [Expectation::notNull('id', 'customer_id')];
     }
 
     public function computes(): string

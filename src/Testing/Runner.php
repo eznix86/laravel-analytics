@@ -20,9 +20,19 @@ class Runner
             throw NotQueryable::ephemeral($model::class);
         }
 
+        $expectations = $model->expectations();
+
+        if ($expectations === []) {
+            return [];
+        }
+
+        if (! $this->exists($model)) {
+            throw NotQueryable::notBuilt($model::class);
+        }
+
         $results = [];
 
-        foreach ($model->expectations() as $expectation) {
+        foreach ($expectations as $expectation) {
             $sql = $expectation->offendingRows($model);
 
             $offending = $model->getConnection()
@@ -32,6 +42,17 @@ class Runner
         }
 
         return $results;
+    }
+
+    /**
+     * A view is not a table on every driver, so both are asked for.
+     */
+    protected function exists(Model&AnalyticsModel $model): bool
+    {
+        $schema = $model->getConnection()->getSchemaBuilder();
+        $table = $model->getTable();
+
+        return $schema->hasTable($table) || $schema->hasView($table);
     }
 
     /**

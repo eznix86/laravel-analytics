@@ -9,6 +9,9 @@ use Eznix86\LaravelAnalytics\Testing\Runner;
 use Eznix86\LaravelAnalytics\Tests\Fixtures\Graph\MonthSpine;
 use Eznix86\LaravelAnalytics\Tests\Fixtures\Graph\OrderTotals;
 use Eznix86\LaravelAnalytics\Tests\Fixtures\Graph\Revenue;
+use Eznix86\LaravelAnalytics\Tests\Fixtures\Graph\StgOrder;
+use Eznix86\LaravelAnalytics\Tests\Fixtures\Unbuilt\Checked;
+use Eznix86\LaravelAnalytics\Tests\Fixtures\Unbuilt\Unchecked;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\DB;
 
@@ -126,4 +129,50 @@ it('describes an expectation in words rather than SQL', function () {
 
     // Assert
     expect($description)->toBe('customer_id, month are unique together');
+});
+
+it('reports a model whose relation was never built instead of throwing', function () {
+    // Arrange
+    usingFixtures('Unbuilt');
+
+    // Act
+    $exitCode = Artisan::call('analytics:test', ['model' => 'Checked']);
+    $output = Artisan::output();
+
+    // Assert
+    expect($exitCode)->toBe(1)
+        ->and($output)->toContain('NOT BUILT')
+        ->and($output)->toContain('analytics:sync');
+});
+
+it('refuses to check expectations against a relation that does not exist', function () {
+    // Arrange
+    usingFixtures('Unbuilt');
+    $check = fn (): array => app(Runner::class)->run(new Checked);
+
+    // Act, Assert
+    expect($check)->toThrow(NotQueryable::class);
+});
+
+it('checks nothing rather than complaining when an unbuilt model declares no expectations', function () {
+    // Arrange
+    usingFixtures('Unbuilt');
+
+    // Act
+    $results = app(Runner::class)->run(new Unchecked);
+
+    // Assert
+    expect($results)->toBe([]);
+});
+
+it('treats a view backed model as built, which hasTable alone does not report', function () {
+    // Arrange
+    $view = new StgOrder;
+
+    // Act
+    $results = app(Runner::class)->run($view);
+
+    // Assert
+    expect($results)->not->toBeEmpty()
+        ->and(array_filter($results, static fn (Result $result): bool => ! $result->passed()))->toBe([]);
 });

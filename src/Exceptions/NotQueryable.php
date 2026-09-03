@@ -15,4 +15,12 @@ class NotQueryable extends RuntimeException
             class_basename($model),
         ));
     }
+
+    public static function notBuilt(string $model): self
+    {
+        return new self(sprintf(
+            '%s has no relation yet, so its expectations cannot be checked. Build it first with php artisan analytics:sync.',
+            class_basename($model),
+        ));
+    }
 }

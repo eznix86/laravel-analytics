@@ -27,6 +27,7 @@
 
 ### Changed
 
+- `analytics:test` reports a model whose relation has not been built yet and exits non-zero, instead of surfacing the driver's `relation does not exist` error. Views count as built, which `hasTable()` alone does not report on any driver.
 - Renamed the package from `eznix86/laravel-dbt` to `eznix86/laravel-analytics`, and the namespace from `Eznix86\LaravelDBT` to `Eznix86\LaravelAnalytics`.
 
 ## [v0.1.0](https://github.com/eznix86/laravel-analytics/compare/...v0.1.0) - 202x-xx-xx

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Eznix86\LaravelAnalytics\Console\Commands;
 
+use Eznix86\LaravelAnalytics\Exceptions\NotQueryable;
 use Eznix86\LaravelAnalytics\Graph\Resolver;
 use Eznix86\LaravelAnalytics\Testing\Result;
 use Eznix86\LaravelAnalytics\Testing\Runner;
@@ -45,6 +46,7 @@ class TestCommand extends AnalyticsCommand
 
         $checked = 0;
         $failed = 0;
+        $unbuilt = [];
 
         $this->newLine();
 
@@ -53,7 +55,18 @@ class TestCommand extends AnalyticsCommand
                 continue;
             }
 
-            $results = $runner->run($node->newModel());
+            try {
+                $results = $runner->run($node->newModel());
+            } catch (NotQueryable) {
+                $unbuilt[] = $node->name();
+
+                $this->components->twoColumnDetail(
+                    '<fg=cyan;options=bold>'.$node->name().'</>',
+                    '<fg=red>NOT BUILT</>',
+                );
+
+                continue;
+            }
 
             if ($results === []) {
                 continue;
@@ -70,6 +83,15 @@ class TestCommand extends AnalyticsCommand
         }
 
         $this->newLine();
+
+        if ($unbuilt !== []) {
+            $this->components->error(sprintf(
+                '%s not built. Run php artisan analytics:sync first.',
+                implode(', ', $unbuilt),
+            ));
+
+            return self::FAILURE;
+        }
 
         if ($checked === 0) {
             $this->components->warn('No expectations declared. Add expectations() to an analytics model.');
