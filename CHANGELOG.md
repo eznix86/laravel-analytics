@@ -1,6 +1,12 @@
 # Release Notes
 
-## [Unreleased](https://github.com/eznix86/laravel-analytics/compare/v0.2.0...1.x)
+## [Unreleased](https://github.com/eznix86/laravel-analytics/compare/v0.2.1...HEAD)
+
+## [v0.2.1](https://github.com/eznix86/laravel-analytics/compare/v0.2.0...v0.2.1) - 2026-09-03
+
+### Fixed
+
+- `make:analytics` generates a fluent `Query` model instead of raw SQL, matching the API the rest of the package leads with.
 
 ## [v0.2.0](https://github.com/eznix86/laravel-analytics/compare/v0.1.0...v0.2.0) - 2026-09-04
 
