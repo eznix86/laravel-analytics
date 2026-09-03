@@ -11,6 +11,7 @@ use Eznix86\LaravelAnalytics\Graph\Resolver;
 use Eznix86\LaravelAnalytics\Materialization;
 use Eznix86\LaravelAnalytics\Models\AnalyticsRun;
 use Eznix86\LaravelAnalytics\RunStatus;
+use Illuminate\Process\InvokedProcess;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\Process;
 use Illuminate\Support\Str;
@@ -271,10 +272,7 @@ class SyncCommand extends AnalyticsCommand
                     $result = $process->wait();
 
                     if ($result->failed()) {
-                        // Leaving workers running would let their cleanup race whatever comes next.
-                        foreach ($running as [, $orphan]) {
-                            $orphan->wait();
-                        }
+                        $this->drain($running);
 
                         return $this->reportFailure(
                             $node,
@@ -302,6 +300,18 @@ class SyncCommand extends AnalyticsCommand
         $this->components->info('Fix it, then resume with: php artisan analytics:sync --continue');
 
         return self::FAILURE;
+    }
+
+    /**
+     * Leaving workers running would let their cleanup race whatever comes next.
+     *
+     * @param  array<int, array{mixed, InvokedProcess}>  $running
+     */
+    protected function drain(array $running): void
+    {
+        foreach ($running as [, $process]) {
+            $process->wait();
+        }
     }
 
     /**

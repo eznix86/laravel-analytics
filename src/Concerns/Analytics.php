@@ -341,7 +341,7 @@ trait Analytics
      */
     protected function analyticsConfiguration(): ?Query
     {
-        if ($this->analyticsConfiguration instanceof Query) {
+        if ($this->analyticsConfiguration !== null) {
             return $this->analyticsConfiguration;
         }
 
@@ -364,7 +364,7 @@ trait Analytics
             $this->readingAnalyticsConfiguration = false;
         }
 
-        return $this->analyticsConfiguration = $computed instanceof Query ? $computed : null;
+        return $this->analyticsConfiguration = Query::fromComputed($computed);
     }
 
     /**

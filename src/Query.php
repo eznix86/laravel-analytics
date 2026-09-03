@@ -12,6 +12,7 @@ use Eznix86\LaravelAnalytics\Exceptions\OutsideJoin;
 use Eznix86\LaravelAnalytics\Expressions\Aliased;
 use Eznix86\LaravelAnalytics\Expressions\Expression;
 use Eznix86\LaravelAnalytics\Grammars\Grammar;
+use Illuminate\Contracts\Database\Query\Builder;
 use Illuminate\Database\Eloquent\Model;
 use InvalidArgumentException;
 
@@ -73,6 +74,14 @@ class Query
     public static function from(string $model, ?string $alias = null): self
     {
         return new self($model, $alias);
+    }
+
+    /**
+     * The query inside whatever computes() returned, if it returned one at all.
+     */
+    public static function fromComputed(string|Builder|self $computed): ?self
+    {
+        return $computed instanceof self ? $computed : null;
     }
 
     /**
