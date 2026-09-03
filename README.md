@@ -1,5 +1,5 @@
 <div align="center">
-    <h1>Laravel Analytics</h1>
+    <h1>Analytics for Laravel</h1>
 </div>
 
 <p align="center">
