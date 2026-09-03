@@ -6,6 +6,7 @@ namespace Eznix86\LaravelAnalytics;
 
 use Eznix86\LaravelAnalytics\Compilation\Compiled;
 use Eznix86\LaravelAnalytics\Compilation\Context;
+use Eznix86\LaravelAnalytics\Contracts\AnalyticsModel;
 use Eznix86\LaravelAnalytics\Exceptions\GroupedSelect;
 use Eznix86\LaravelAnalytics\Exceptions\OutsideJoin;
 use Eznix86\LaravelAnalytics\Expressions\Aliased;
@@ -57,6 +58,13 @@ final class Query
     private array $orders = [];
 
     private ?int $limit = null;
+
+    /**
+     * @var list<callable(self): self>
+     */
+    private array $incrementally = [];
+
+    private ?string $since = null;
 
     /**
      * @param  class-string<Model>  $model
@@ -180,6 +188,30 @@ final class Query
         });
     }
 
+    /**
+     * Applied only on a run that appends to an existing incremental relation, which is
+     * the fluent form of dbt's is_incremental() block.
+     *
+     * @param  callable(self): self  $callback
+     */
+    public function whenIncremental(callable $callback): self
+    {
+        return $this->mutate(static function (self $query) use ($callback): void {
+            $query->incrementally[] = $callback;
+        });
+    }
+
+    /**
+     * Restrict an incremental run to rows past the high water mark of $column, using the
+     * dimension expression behind the column when there is one.
+     */
+    public function since(string $column): self
+    {
+        return $this->mutate(static function (self $query) use ($column): void {
+            $query->since = $column;
+        });
+    }
+
     public function orderBy(string ...$columns): self
     {
         return $this->mutate(static function (self $query) use ($columns): void {
@@ -202,7 +234,12 @@ final class Query
         return $callback($this);
     }
 
-    public function compile(Context $context, Grammar $grammar): Compiled
+    public function compile(Context $context, Grammar $grammar, AnalyticsModel $model): Compiled
+    {
+        return $this->resolve($context, $grammar, $model)->render($context, $grammar);
+    }
+
+    private function render(Context $context, Grammar $grammar): Compiled
     {
         $sql = 'select '.implode(', ', $this->selectList($grammar))
             .' from '.$this->relation($context, $this->model, $this->alias);
@@ -239,6 +276,63 @@ final class Query
     }
 
     /**
+     * The query as it applies to this run: incremental blocks folded in, and a microbatch
+     * model narrowed to the batch being built.
+     */
+    private function resolve(Context $context, Grammar $grammar, AnalyticsModel $model): self
+    {
+        $query = $this;
+
+        if ($model->isIncremental()) {
+            foreach ($this->incrementally as $callback) {
+                $query = $callback($query);
+            }
+
+            if ($this->since !== null) {
+                $query = $query->whereRaw($this->watermark($grammar, $model, $this->since));
+            }
+        }
+
+        $window = $context->batchWindow();
+        $eventTime = $model->eventTime();
+
+        if ($window !== null && $eventTime !== null) {
+            $query = $query
+                ->where($eventTime, '>=', $window->start->toDateTimeString())
+                ->where($eventTime, '<', $window->end->toDateTimeString());
+        }
+
+        return $query->mutate(static function (self $resolved): void {
+            $resolved->incrementally = [];
+            $resolved->since = null;
+        });
+    }
+
+    private function watermark(Grammar $grammar, AnalyticsModel $model, string $column): string
+    {
+        $operator = $model->incrementalStrategy() === IncrementalStrategy::Append ? '>' : '>=';
+
+        return sprintf(
+            '%s %s (select max(%s) from %s)',
+            $this->expression($this->dimensionFor($column) ?? $column, $grammar),
+            $operator,
+            $column,
+            $model->getTable(),
+        );
+    }
+
+    private function dimensionFor(string $alias): ?Expression
+    {
+        foreach ($this->dimensions as $dimension) {
+            if ($dimension instanceof Aliased && $dimension->alias() === $alias) {
+                return $dimension->expression();
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * @param  class-string<Model>  $model
      */
     private function relation(Context $context, string $model, ?string $alias): string
@@ -254,15 +348,15 @@ final class Query
         $list = [];
 
         foreach ($this->dimensions as $dimension) {
-            $list[] = $this->render($dimension, $grammar);
+            $list[] = $this->expression($dimension, $grammar);
         }
 
         foreach ($this->measures as [$alias, $expression]) {
-            $list[] = $this->render($expression, $grammar).' as '.$alias;
+            $list[] = $this->expression($expression, $grammar).' as '.$alias;
         }
 
         foreach ($this->selects as $select) {
-            $list[] = $this->render($select, $grammar);
+            $list[] = $this->expression($select, $grammar);
         }
 
         return $list === [] ? ['*'] : $list;
@@ -276,20 +370,20 @@ final class Query
         $list = [];
 
         foreach ($this->dimensions as $dimension) {
-            $list[] = $this->render(
+            $list[] = $this->expression(
                 $dimension instanceof Aliased ? $dimension->expression() : $dimension,
                 $grammar,
             );
         }
 
         foreach ($this->grains as $grain) {
-            $list[] = $this->render($grain, $grammar);
+            $list[] = $this->expression($grain, $grammar);
         }
 
         return $list;
     }
 
-    private function render(Expression|string $value, Grammar $grammar): string
+    private function expression(Expression|string $value, Grammar $grammar): string
     {
         return $value instanceof Expression ? $value->render($grammar) : $value;
     }

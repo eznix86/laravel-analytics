@@ -4,6 +4,7 @@
 
 ### Added
 
+- `since()` and `whenIncremental()` on a fluent query, restricting an incremental run without the model writing the filter twice; `since()` compares with `>` when the model appends and `>=` when it replaces by key, and compares the dimension expression rather than its alias. A microbatch model is narrowed to the batch being built automatically, from `eventTime()`.
 - A fluent `Query` accepted by `computes()`, which derives `group by` from `per()` and `grain()`, binds `where()` values, registers dependencies from the model class passed to `from()` and `join()`, and refuses `select()` on a grouped query. Immutable: every method returns a new query.
 - `Analytics` trait and `AnalyticsModel` contract for defining analytics models as Eloquent models.
 - `ref()` dependency resolution that distinguishes analytics models from plain Eloquent sources.
@@ -28,6 +29,7 @@
 
 ### Changed
 
+- A model's compilation context now stays set while its fluent query compiles. It was cleared as soon as `computes()` returned, so `isIncremental()` could not see a `--full-refresh` and a fluent incremental model kept its high water mark filter, rebuilding nothing.
 - `analytics:test` reports a model whose relation has not been built yet and exits non-zero, instead of surfacing the driver's `relation does not exist` error. Views count as built, which `hasTable()` alone does not report on any driver.
 - Renamed the package from `eznix86/laravel-dbt` to `eznix86/laravel-analytics`, and the namespace from `Eznix86\LaravelDBT` to `Eznix86\LaravelAnalytics`.
 

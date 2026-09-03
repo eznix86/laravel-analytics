@@ -162,7 +162,8 @@ it('leaves the query it was built from untouched', function () {
 
     // Act
     $base->select('amount');
-    $sql = $base->compile(app(Context::class), (new Rollup)->grammar())->sql;
+    $model = new Rollup;
+    $sql = $base->compile(app(Context::class), $model->grammar(), $model)->sql;
 
     // Assert
     expect($sql)->toContain('select id from')

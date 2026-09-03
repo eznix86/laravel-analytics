@@ -101,29 +101,29 @@ class Context
 
         try {
             $computed = $model->computes();
+
+            if ($computed instanceof Query) {
+                $compiled = $computed->compile($this, $model->grammar(), $model);
+
+                foreach ($compiled->bindings as $binding) {
+                    $this->bindings[] = $binding;
+                }
+
+                return trim($compiled->sql);
+            }
+
+            if ($computed instanceof Builder) {
+                foreach ($computed->getBindings() as $binding) {
+                    $this->bindings[] = $binding;
+                }
+
+                return trim($computed->toSql());
+            }
+
+            return trim($computed);
         } finally {
             $model->usingCompilationContext(null);
         }
-
-        if ($computed instanceof Query) {
-            $compiled = $computed->compile($this, $model->grammar());
-
-            foreach ($compiled->bindings as $binding) {
-                $this->bindings[] = $binding;
-            }
-
-            return trim($compiled->sql);
-        }
-
-        if ($computed instanceof Builder) {
-            foreach ($computed->getBindings() as $binding) {
-                $this->bindings[] = $binding;
-            }
-
-            return trim($computed->toSql());
-        }
-
-        return trim($computed);
     }
 
     public function wrap(string $sql): string

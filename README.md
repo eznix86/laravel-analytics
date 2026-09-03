@@ -571,6 +571,33 @@ forget `ref()`.
 A `Query` is immutable: every method returns a new query, so a shared base can be handed to several
 models without one of them altering it.
 
+### Incremental and microbatch models
+
+`since()` restricts an incremental run to rows past the high water mark of a column, and uses the
+dimension expression behind the column when there is one, because no driver accepts a select alias
+in a `where`:
+
+```php
+return $this->from(Event::class)
+    ->per(date_trunc('day', 'happened_at')->as('day'), 'name')
+    ->measure('total', 'count(*)')
+    ->since('day');
+```
+
+The comparison follows the incremental strategy: `>` when the model appends, so the boundary row is
+not duplicated, and `>=` when a unique key makes the build replace rows, so a row restated within the
+boundary period is rebuilt. Nothing is added on the build that creates the relation, or on a
+`--full-refresh`.
+
+`whenIncremental()` takes the general case, and is the fluent form of dbt's `is_incremental()` block:
+
+```php
+->whenIncremental(fn (Query $query): Query => $query->whereRaw('id > (select max(id) from '.$this->getTable().')'))
+```
+
+A microbatch model needs neither: the window of the batch being built is applied from `eventTime()`,
+as bound values, with no filter written in the model.
+
 ## Builder-backed models
 
 `computes()` also accepts a query builder, which is portable for free and reads well for staging models:
