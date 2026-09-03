@@ -360,7 +360,24 @@ class ImportedEvents extends Model implements AnalyticsModel
 
 The rows are read in chunks and upserted, so a rerun replaces rather than doubles. `appendOnly:` reads
 only past the highest value already stored, and `--full-refresh` empties the table and reads
-everything again. Downstream models on `pgsql` then reference `ImportedEvents` like any other model.
+everything again.
+
+An imported table is an ordinary node in the graph, so models on that connection reference it like
+any other model, and the import builds first:
+
+```php
+public function computes(): Query
+{
+    return $this->from(ImportedEvents::class)
+        ->per('name', date_trunc('day', 'happened_at')->as('day'))
+        ->measure('total', 'count(*)');
+}
+```
+
+```
+ImportedEvents  import append .. 3 rows
+EventsByName    table          .. 2 rows
+```
 
 Rows are streamed rather than loaded. MySQL buffers a whole result set in PHP memory unless told not
 to, so an import turns that off for the read: one million rows peaked at 77 MB instead of 241 MB, at
