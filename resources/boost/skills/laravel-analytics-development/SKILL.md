@@ -30,6 +30,10 @@ Use this skill when a Laravel application needs analytics tables that are derive
 Generate with `php artisan make:analytics Revenue`. Models live in `app/Analytics`, extend `Illuminate\Database\Eloquent\Model`, implement `Eznix86\LaravelAnalytics\Contracts\AnalyticsModel`, and use `Eznix86\LaravelAnalytics\Concerns\Analytics`.
 
 ```php
+use Eznix86\LaravelAnalytics\Query;
+
+use function Eznix86\LaravelAnalytics\date_trunc;
+
 class Revenue extends Model implements AnalyticsModel
 {
     use Analytics;
@@ -39,26 +43,58 @@ class Revenue extends Model implements AnalyticsModel
         return [['customer_id']];
     }
 
-    public function computes(): string
+    public function computes(): Query
     {
-        return 'select customer_id, sum(amount) as total from '
-            .$this->ref(StgOrder::class)
-            .' group by customer_id';
+        return $this->from(StgOrder::class)
+            ->where('status', '<>', 'cancelled')
+            ->per('customer_id', date_trunc('month', 'placed_at')->as('month'))
+            ->measure('total', 'sum(amount)');
     }
 }
 ```
 
-- `computes(): string|Builder` is the only required method
-- `$this->ref(Model::class)` returns the relation to select from and records the dependency; pass a plain Eloquent model for raw tables, another analytics model for derived ones
-- `materialization()` returns `Materialization::Table` (default), `View`, `Incremental`, `Microbatch`, `Snapshot`, or `Ephemeral`
-- `indexes()` must declare any index the model needs, because `create table as select` produces none
-- `freshness()` returns a window such as `'25 hours'` and enables `Model::isStale()`
-- `expectations()` declares data assertions checked by `analytics:test`
-- for `Incremental`, guard the filter with `isIncremental()`, declare `uniqueKey()` when rows can be restated, and set `onSchemaChange()` if the columns will drift
-- for `Snapshot`, declare `uniqueKey()` and optionally `checkColumns()`; each sync closes changed versions and opens new ones
-- for `Microbatch`, declare `eventTime()`, `batchSize()` and `begin()`, and place `$this->batchWindow()` in the model's where clause
+- `computes(): string|Builder|Query` is the only required method. Prefer the fluent `Query`.
+- `$this->from(Model::class, 'alias')` starts the query and records the dependency. Pass a plain Eloquent model for a raw table, another analytics model for a derived one. `$this->ref()` does the same inside a raw fragment.
+- `per()` declares a dimension, selected and grouped in one statement. `measure()` declares an aggregate. `grain()` groups by an expression that is not selected. The `group by` is derived, and `select()` is refused on a grouped query.
+- `select()` is for ungrouped models, and is where a window function goes, wrapped in `raw()`.
+- `join()` and `leftJoin()` take the model class and one condition. Chain `on()` for a second.
+- `where()` binds its value. `whereRaw()` takes a fragment. Also `orderBy()`, `limit()`, `pipe()`.
+- `indexes()` must declare any index the model needs, because `create table as select` produces none.
+- `freshness()` returns a window such as `'25 hours'` and enables `Model::isStale()`.
+- `expectations()` declares data assertions checked by `analytics:test`.
 
-### 3. Build and schedule
+### 3. Choose the materialization
+
+The declared return type of `computes()` says how the model is persisted. Set it with the matching call at the end of the chain.
+
+| Return type | Materialization | Call |
+| --- | --- | --- |
+| `Query` | table | the default |
+| `ViewQuery` | view | `->view()` |
+| `EphemeralQuery` | ephemeral, inlined as a CTE | `->ephemeral()` |
+| `IncrementalQuery` | incremental | `->incremental(replacing:, since:)` |
+| `MicrobatchQuery` | microbatch | `->microbatch($eventTime, $size, begin:, lookback:)` |
+| `SnapshotQuery` | snapshot | `->snapshot(trackedBy:, whenChanged:)` |
+
+```php
+public function computes(): IncrementalQuery
+{
+    return $this->from(Event::class)
+        ->per(date_trunc('day', 'happened_at')->as('day'), 'name')
+        ->measure('total', 'count(*)')
+        ->incremental(replacing: ['day', 'name'], since: 'day');
+}
+```
+
+- Do not also override `materialization()`, `uniqueKey()`, `eventTime()`, `batchSize()`, `begin()`, `lookback()` or `checkColumns()`. They are read off the query.
+- `since('column')` adds the high water mark filter. It uses `>` when the model appends and `>=` when a replace key makes it replace. If the column is a dimension it compares the expression, not the alias.
+- `whenIncremental(fn (IncrementalQuery $q) => ...)` covers anything `since()` cannot express.
+- A microbatch model needs no filter. The batch window is applied from its event time column.
+- Neither filter is added on the first build or under `--full-refresh`.
+- Set `onSchemaChange()` when an incremental model's columns will drift.
+- A model that returns raw SQL keeps `materialization()` and the rest as methods, and writes its own filter with `isIncremental()` and its own batch predicate with `$this->batchWindow()`.
+
+### 4. Build and schedule
 
 ```bash
 php artisan analytics:graph                        # build order, grouped by connection
@@ -79,7 +115,7 @@ php artisan analytics:prune                        # drop sync history past the 
 Schedule::command('analytics:sync')->dailyAt('03:00');
 ```
 
-### 4. Declare expectations
+### 5. Declare expectations
 
 ```php
 public function expectations(): array
@@ -96,7 +132,7 @@ public function expectations(): array
 
 `analytics:test` exits 1 when any expectation fails, so schedule it after `analytics:sync`. From a test suite, assert `app(Runner::class)->failures(new Model)` is empty.
 
-### 5. Read through Eloquent
+### 6. Read through Eloquent
 
 ```php
 Revenue::query()->where('total', '>', 1000)->get();
@@ -104,15 +140,43 @@ Revenue::lastSyncedAt();
 Revenue::isStale();
 ```
 
-### 6. Handle dialect differences
+### 7. Handle dialect differences
 
-`computes()` returns a string, a query builder, or a fluent `Eznix86\LaravelAnalytics\Query` started with `$this->from(Model::class, 'alias')`. On the fluent query, `per()` declares a dimension that is selected and grouped in one statement, `measure()` an aggregate, and `grain()` a grouping key that is not selected; the `group by` is derived, and `select()` is refused on a grouped query. Use `join()`/`leftJoin()` with `on()` for a further condition, `where()` for a bound value, `whereRaw()` for a fragment, and `raw()` for a window function. Passing the model class to `from()`/`join()` registers the dependency, so `ref()` is only needed inside raw fragments and string models.
+Use an expression rather than one database's function name. Expressions carry no driver and resolve one when they compile, so the same object becomes `date_trunc` on PostgreSQL, `date_format` on MySQL and `strftime` on SQLite.
 
-The declared return type of `computes()` is the materialization: `Query` (table), `ViewQuery`, `EphemeralQuery`, `IncrementalQuery`, `MicrobatchQuery`, `SnapshotQuery`. Set it with the matching call at the end of the chain — `->view()`, `->ephemeral()`, `->incremental(replacing:, since:)`, `->microbatch($eventTime, $size, begin:)`, `->snapshot(trackedBy:, whenChanged:)` — and do not also override `materialization()`, `uniqueKey()`, `eventTime()`, `batchSize()`, `begin()` or `checkColumns()`; they are read off the query. A model returning raw SQL keeps those methods.
+```php
+use function Eznix86\LaravelAnalytics\{cast, date_add, date_diff, date_spine, date_trunc, raw, string_agg};
 
-On an incremental model, `since('column')` adds the high water mark filter — `>` when the model appends, `>=` when a unique key makes it replace — and resolves a dimension alias back to its expression; `whenIncremental(fn (Query $q) => ...)` covers anything else. A microbatch model needs no filter: the batch window is applied from `eventTime()`. Neither is added on the first build or under `--full-refresh`.
+->per(date_trunc('month', 'created_at')->as('month'))
+->measure('ratio', raw('%s / nullif(%s, 0)', cast('total', 'decimal(18,4)'), 'customers'))
+```
 
-Use the driver-aware helpers inside `computes()` rather than hard-coding one database's functions: `$this->dateTrunc`, `dateAdd`, `dateDiff`, `dateSpine`, `stringAgg`, `castAs`. Outside a model — in a shared metric class, or in a query builder — use the expression form of the same helpers (`Eznix86\LaravelAnalytics\{date_trunc, date_add, date_diff, date_spine, string_agg, cast, raw}`), which resolves the driver when it is compiled instead of being handed one. Expressions nest, carry an `->as()` alias, and render inside a string model with `$this->render($expression)`. Register an unsupported driver with `app(GrammarManager::class)->extend('clickhouse', ClickHouseGrammar::class)`.
+- Expressions nest, and `->as()` gives one an alias.
+- `raw()` fills `%s` placeholders with rendered operands. With no operands the fragment is left alone.
+- Inside a raw SQL model use the string helpers instead: `$this->dateTrunc`, `dateAdd`, `dateDiff`, `dateSpine`, `stringAgg`, `castAs`. `$this->render($expression)` turns an expression into a string the same way.
+- Register an unsupported driver with `app(GrammarManager::class)->extend('clickhouse', ClickHouseGrammar::class)`.
+
+### 8. Share a metric across rollups
+
+A metric is a static method returning a SQL fragment, so the arithmetic is written once.
+
+```php
+final class Metrics
+{
+    public static function transPerCust(string $alias = 't'): Expression
+    {
+        return raw(
+            '%s / nullif(%s, 0)',
+            cast("count(distinct {$alias}.transaction_id)", 'decimal(18,4)'),
+            "count(distinct {$alias}.customer_id)",
+        );
+    }
+}
+
+->measure('trans_per_cust', Metrics::transPerCust())
+```
+
+Take the alias as a parameter. A fragment that hardcodes `t.` forces every caller to alias its source `t`, and a caller that aliases something else gets a wrong number with no error. Only do this when the metric is used in two or more models and its definition is not obvious.
 
 ## Rules, References, and Templates
 
@@ -131,12 +195,12 @@ Read before executing:
 
 - writing to an analytics model; they are rebuilt from scratch on every sync and writes throw
 - querying an `Ephemeral` model directly; it has no relation and is inlined into its consumers
-- calling `computes()` directly; use `compile()` so refs and CTEs resolve
+- calling `computes()` directly on a raw SQL model; use `compile()` so refs and CTEs resolve
 - referencing a model on another connection; replicate the source first
 - omitting `indexes()` on a large table and losing index coverage after every rebuild
 - rerunning a whole failed sync from scratch instead of `analytics:sync --continue`
 - using `--parallel` for a graph of fast models; each worker pays a framework boot
 - putting a window function in an incremental model; the boundary row silently gets a wrong value, and the package refuses it
-- forgetting `uniqueKey()` on an incremental model whose rows can be restated, which duplicates them instead of replacing
+- forgetting `replacing:` on an incremental model whose rows can be restated, which duplicates them instead of replacing
 - pointing `--full-refresh` at a snapshot; its history cannot be recomputed and the command refuses
 - giving a microbatch model an event time column that holds a date rather than a full timestamp; on SQLite it will never match the batch window
