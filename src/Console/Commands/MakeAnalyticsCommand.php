@@ -37,14 +37,6 @@ class MakeAnalyticsCommand extends GeneratorCommand
     }
 
     /**
-     * @param  string  $rootNamespace
-     */
-    protected function getDefaultNamespace($rootNamespace): string
-    {
-        return rtrim($rootNamespace, '\\');
-    }
-
-    /**
      * @param  string  $name
      */
     protected function getPath($name): string
