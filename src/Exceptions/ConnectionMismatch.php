@@ -15,7 +15,7 @@ class ConnectionMismatch extends RuntimeException
             "Analytics models cannot query across connections: the database engine cannot join two connections in one statement.\n\n".
             "Fix one of:\n".
             "  - move %s onto the '%s' connection\n".
-            '  - replicate %s into %s first (that is an ingestion job, not an analytics model)',
+            '  - import %s onto %s first, with an import model',
             class_basename($model),
             $modelConnection ?? 'default',
             class_basename($dependency),

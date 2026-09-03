@@ -7,6 +7,7 @@ namespace Eznix86\LaravelAnalytics\Engines;
 use Eznix86\LaravelAnalytics\Compilation\BatchWindow;
 use Eznix86\LaravelAnalytics\Compilation\Compiler;
 use Eznix86\LaravelAnalytics\Contracts\AnalyticsModel;
+use Eznix86\LaravelAnalytics\Exceptions\InvalidImport;
 use Eznix86\LaravelAnalytics\Exceptions\MissingBatchBegin;
 use Eznix86\LaravelAnalytics\Exceptions\MissingUniqueKey;
 use Eznix86\LaravelAnalytics\Exceptions\SchemaChanged;
@@ -51,6 +52,7 @@ class NativeEngine
                 $node->materialization === Materialization::View => $this->replaceView($node),
                 $node->materialization === Materialization::Snapshot => $this->snapshotVersions($node),
                 $node->materialization === Materialization::Microbatch => $this->buildBatches($node),
+                $node->materialization === Materialization::Import => $this->importRows($node),
                 $node->appending => $this->appendRows($node),
                 default => $this->swapTable($node),
             };
@@ -137,6 +139,112 @@ class NativeEngine
     /**
      * Build the new rows beside the target, drop the ones they replace, then insert.
      */
+    /**
+     * Copy rows from the connection the source lives on onto the model's own. The target
+     * table is never created here, so its column types stay the ones you migrated.
+     */
+    protected function importRows(Node $node): int
+    {
+        $model = $node->newModel();
+        $target = $model->getConnection();
+        $table = $model->getTable();
+
+        if (! $target->getSchemaBuilder()->hasTable($table)) {
+            throw InvalidImport::missingTable($node->model, $table, $node->connection);
+        }
+
+        $key = array_values(array_filter(
+            $model->uniqueKey(),
+            static fn (string $column): bool => $column !== '',
+        ));
+
+        if ($key === []) {
+            throw InvalidImport::missingKey($node->model);
+        }
+
+        $this->guardUniqueIndex($node, $target, $table, $key);
+
+        if (! $node->appending) {
+            $target->table($table)->delete();
+        }
+
+        $sql = $node->compiled->sql;
+        $bindings = $node->compiled->bindings;
+        $watermark = $node->appending ? $model->watermark() : null;
+
+        if ($watermark !== null) {
+            $high = $target->selectOne(sprintf(
+                'select max(%s) as high from %s',
+                $watermark,
+                $this->physical($target, $table),
+            ))?->high;
+
+            if ($high !== null) {
+                $sql = sprintf('select * from (%s) as import_source where %s > ?', $sql, $watermark);
+                $bindings[] = $high;
+            }
+        }
+
+        $source = $this->sourceOf($node);
+        $size = $model->importChunk();
+
+        $buffer = [];
+        $written = 0;
+
+        foreach ($source->cursor($sql, $bindings) as $row) {
+            $buffer[] = (array) $row;
+
+            if (count($buffer) < $size) {
+                continue;
+            }
+
+            $written += $this->write($target, $table, $buffer, $key);
+            $buffer = [];
+        }
+
+        return $written + ($buffer === [] ? 0 : $this->write($target, $table, $buffer, $key));
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $rows
+     * @param  non-empty-list<non-empty-string>  $key
+     */
+    protected function write(Connection $target, string $table, array $rows, array $key): int
+    {
+        $target->table($table)->upsert($rows, $key);
+
+        return count($rows);
+    }
+
+    protected function sourceOf(Node $node): Connection
+    {
+        $source = $node->compiled->sources[0] ?? null;
+
+        /** @var Model $model */
+        $model = new $source;
+
+        return $model->getConnection();
+    }
+
+    /**
+     * An upsert needs somewhere to detect the conflict, and without the index every
+     * rerun would insert the same rows again.
+     *
+     * @param  list<string>  $key
+     */
+    protected function guardUniqueIndex(Node $node, Connection $target, string $table, array $key): void
+    {
+        foreach ($target->getSchemaBuilder()->getIndexes($table) as $index) {
+            $columns = array_map(strtolower(...), (array) $index['columns']);
+
+            if (($index['unique'] === true || $index['primary'] === true) && $columns === array_map(strtolower(...), $key)) {
+                return;
+            }
+        }
+
+        throw InvalidImport::missingUniqueIndex($node->model, $table, $key);
+    }
+
     protected function appendRows(Node $node): int
     {
         $model = $node->newModel();

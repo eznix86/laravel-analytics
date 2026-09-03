@@ -12,4 +12,5 @@ enum Materialization: string
     case Microbatch = 'microbatch';
     case Snapshot = 'snapshot';
     case Ephemeral = 'ephemeral';
+    case Import = 'import';
 }

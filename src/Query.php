@@ -245,6 +245,17 @@ class Query
         return $this->becomes(SnapshotQuery::class)->tracking($trackedBy, $whenChanged);
     }
 
+    /**
+     * Copy rows from the connection the source lives on onto this model's connection.
+     *
+     * @param  list<string>  $replacing  Columns identifying a row, so a rerun replaces rather than doubles.
+     * @param  string|null  $since  Column whose high water mark bounds the read.
+     */
+    public function import(array $replacing, ?string $since = null, int $chunk = 1000): ImportQuery
+    {
+        return $this->becomes(ImportQuery::class)->copying($replacing, $since, $chunk);
+    }
+
     public function view(): ViewQuery
     {
         return $this->becomes(ViewQuery::class);

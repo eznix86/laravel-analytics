@@ -77,6 +77,7 @@ The declared return type of `computes()` says how the model is persisted. Set it
 | `IncrementalQuery` | incremental | `->incremental(replacing:, since:)` |
 | `MicrobatchQuery` | microbatch | `->microbatch($eventTime, $size, begin:, lookback:)` |
 | `SnapshotQuery` | snapshot | `->snapshot(trackedBy:, whenChanged:)` |
+| `ImportQuery` | import from another connection | `->import(replacing:, since:, chunk:)` |
 
 ```php
 public function computes(): IncrementalQuery
@@ -94,6 +95,7 @@ public function computes(): IncrementalQuery
 - A microbatch model needs no filter. The batch window is applied from its event time column.
 - Neither filter is added on the first build or under `--full-refresh`.
 - Set `onSchemaChange()` when an incremental model's columns will drift.
+- An import copies rows from the connection its source lives on onto the model's own connection, which is the only model allowed to cross a connection. Write a migration for the target table first, with a unique index on the replace key. The import never creates the table, so the column types stay the ones you chose. Its source must be a plain Eloquent model, not an analytics model on the other connection.
 - A model that returns raw SQL keeps `materialization()` and the rest as methods, and writes its own filter with `isIncremental()` and its own batch predicate with `$this->batchWindow()`.
 
 ### 4. Build and schedule
@@ -198,7 +200,7 @@ Read before executing:
 - writing to an analytics model; they are rebuilt from scratch on every sync and writes throw
 - querying an `Ephemeral` model directly; it has no relation and is inlined into its consumers
 - calling `computes()` directly on a raw SQL model; use `compile()` so refs and CTEs resolve
-- referencing a model on another connection; replicate the source first
+- referencing a model on another connection; import the source onto this one first with an import model
 - omitting `indexes()` on a large table and losing index coverage after every rebuild
 - rerunning a whole failed sync from scratch instead of `analytics:sync --continue`
 - using `--parallel` for a graph of fast models; each worker pays a framework boot

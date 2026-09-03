@@ -10,6 +10,7 @@ use Eznix86\LaravelAnalytics\Contracts\AnalyticsModel;
 use Eznix86\LaravelAnalytics\Exceptions\CircularDependency;
 use Eznix86\LaravelAnalytics\Exceptions\ConnectionMismatch;
 use Eznix86\LaravelAnalytics\Exceptions\IncrementalWindowFunction;
+use Eznix86\LaravelAnalytics\Exceptions\InvalidImport;
 use Eznix86\LaravelAnalytics\Exceptions\OutsideBatch;
 use Eznix86\LaravelAnalytics\Exceptions\SnapshotHistory;
 use Eznix86\LaravelAnalytics\Materialization;
@@ -81,7 +82,7 @@ class Resolver
         foreach ($this->discover() as $class) {
             $model = new $class;
 
-            $appending = $model->materialization() === Materialization::Incremental
+            $appending = in_array($model->materialization(), [Materialization::Incremental, Materialization::Import], true)
                 && ! $fullRefresh
                 && $model->getConnection()->getSchemaBuilder()->hasTable($model->getTable());
 
@@ -95,6 +96,7 @@ class Resolver
         }
 
         $this->guardConnections($nodes);
+        $this->guardImports($nodes);
         $this->guardIncrementalWindows($nodes);
         $this->guardSnapshots($nodes);
 
@@ -135,6 +137,10 @@ class Resolver
     protected function guardConnections(array $nodes): void
     {
         foreach ($nodes as $node) {
+            if ($node->materialization === Materialization::Import) {
+                continue;
+            }
+
             foreach ($node->dependencies() as $dependency) {
                 if (! isset($nodes[$dependency])) {
                     continue;
@@ -162,6 +168,40 @@ class Resolver
                         $source,
                         $sourceConnection,
                     );
+                }
+            }
+        }
+    }
+
+    /**
+     * An import is the one model allowed to cross a connection, so the things that keep
+     * the two graphs independent are checked here instead.
+     *
+     * @param  array<class-string, Node>  $nodes
+     */
+    protected function guardImports(array $nodes): void
+    {
+        foreach ($nodes as $node) {
+            if ($node->materialization !== Materialization::Import) {
+                continue;
+            }
+
+            $model = $node->newModel();
+
+            if ($model->uniqueKey() === []) {
+                throw InvalidImport::missingKey($node->model);
+            }
+
+            foreach ($node->dependencies() as $dependency) {
+                throw InvalidImport::derivedSource($node->model, $dependency);
+            }
+
+            foreach ($node->compiled->sources as $source) {
+                /** @var Model $sourceModel */
+                $sourceModel = new $source;
+
+                if ($this->connectionOf($sourceModel) === $node->connection) {
+                    throw InvalidImport::sameConnection($node->model, $node->connection);
                 }
             }
         }

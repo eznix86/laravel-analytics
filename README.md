@@ -187,6 +187,7 @@ configuration that materialization needs:
 | `IncrementalQuery` | every row, topped up | `->incremental(replacing:, since:)` |
 | `MicrobatchQuery` | every row, rebuilt one time slice at a time | `->microbatch($eventTime, $size, begin:)` |
 | `SnapshotQuery` | one row per version, `valid_from` / `valid_to` | `->snapshot(trackedBy:, whenChanged:)` |
+| `ImportQuery` | rows copied from another connection | `->import(replacing:, since:)` |
 
 A setting from another materialization is not on the query at all. You cannot call `since()` on a
 table query, or `whenChanged()` on an incremental one. A wrong combination fails to compile instead
@@ -321,6 +322,58 @@ store=2 sqft=6000  region=Manchester    valid_from=2026-09-03 10:41:02  valid_to
 The reported row count is versions opened, not the size of the table. `trackedBy:` is required. Without it nothing identifies which row a version belongs to, and the resolver says so.
 
 **A full refresh leaves snapshots alone**, because their history cannot be recomputed from the source. Aiming `--full-refresh` at a snapshot by name fails outright rather than quietly destroying it.
+
+### Importing from another connection
+
+A model can only read from one connection, because no database engine can join two in a single
+statement. An import model is how you get the other side's data onto the connection you need it on.
+
+Write a migration for the target table first, so you choose the column types:
+
+```php
+Schema::create('imported_events', function (Blueprint $table): void {
+    $table->unsignedBigInteger('id');
+    $table->string('name');
+    $table->timestamp('happened_at');
+
+    $table->unique(['id']);
+});
+```
+
+Then the model reads from the source and lands on its own connection:
+
+```php
+class ImportedEvents extends Model implements AnalyticsModel
+{
+    use Analytics;
+
+    protected $connection = 'pgsql';        // where the rows land
+
+    public function computes(): ImportQuery
+    {
+        return $this->from(Event::class)    // Event lives on the warehouse connection
+            ->select('id', 'name', 'happened_at')
+            ->import(replacing: ['id'], since: 'id', chunk: 1000);
+    }
+}
+```
+
+The rows are read in chunks and upserted, so a rerun replaces rather than doubles. `since:` reads only
+past the highest value already stored, and `--full-refresh` empties the table and reads everything
+again. Downstream models on `pgsql` then reference `ImportedEvents` like any other model.
+
+Four things it refuses, each with the fix in the message:
+
+- a target table that does not exist, because an import never creates one
+- a target with no unique index on the replace key, since the upsert would insert duplicates instead
+- an import with no replace key, since a second run would double the rows
+- a source that is an analytics model on another connection, rather than a plain Eloquent source
+
+That last one keeps the two connections independent graphs. Import the table the other model is built
+from, or build it on this connection instead.
+
+The package does not do the rest of ingestion. There is no API reader, no file loader and no change
+capture. An import moves rows between connections your application already has.
 
 ## Indexes
 
@@ -491,6 +544,8 @@ class Region extends Model
 ```
 
 That stays one Laravel connection, so `ref()` accepts it. PostgreSQL cannot join across two databases at all (`cross-database references are not implemented`); use schemas there.
+
+When the data is genuinely on another connection, copy it over with an import model.
 
 ## Cross-driver SQL
 

@@ -54,5 +54,11 @@ abstract class TestCase extends Orchestra
             $table->string('status');
             $table->timestamp('placed_on')->nullable();
         });
+
+        Schema::connection('warehouse')->create('events', function (Blueprint $table): void {
+            $table->id();
+            $table->string('name');
+            $table->timestamp('happened_at');
+        });
     }
 }

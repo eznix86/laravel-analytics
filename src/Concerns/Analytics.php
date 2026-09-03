@@ -18,6 +18,7 @@ use Eznix86\LaravelAnalytics\Exceptions\ReadOnlyModel;
 use Eznix86\LaravelAnalytics\Expressions\Expression;
 use Eznix86\LaravelAnalytics\Grammars\Grammar;
 use Eznix86\LaravelAnalytics\Grammars\GrammarManager;
+use Eznix86\LaravelAnalytics\ImportQuery;
 use Eznix86\LaravelAnalytics\IncrementalQuery;
 use Eznix86\LaravelAnalytics\IncrementalStrategy;
 use Eznix86\LaravelAnalytics\Materialization;
@@ -99,7 +100,7 @@ trait Analytics
     {
         $query = $this->analyticsConfiguration();
 
-        return $query instanceof IncrementalQuery || $query instanceof SnapshotQuery
+        return $query instanceof IncrementalQuery || $query instanceof SnapshotQuery || $query instanceof ImportQuery
             ? $query->uniqueKey()
             : [];
     }
@@ -162,6 +163,23 @@ trait Analytics
         $query = $this->analyticsConfiguration();
 
         return $query instanceof MicrobatchQuery ? $query->lookback() : 1;
+    }
+
+    /**
+     * The column an import reads past, and how many rows it buffers before writing.
+     */
+    public function watermark(): ?string
+    {
+        $query = $this->analyticsConfiguration();
+
+        return $query instanceof ImportQuery ? $query->watermarkColumn() : null;
+    }
+
+    public function importChunk(): int
+    {
+        $query = $this->analyticsConfiguration();
+
+        return $query instanceof ImportQuery ? $query->chunkSize() : 1000;
     }
 
     public function begin(): ?string

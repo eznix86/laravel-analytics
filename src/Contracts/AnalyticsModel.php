@@ -74,6 +74,16 @@ interface AnalyticsModel
     public function begin(): ?string;
 
     /**
+     * The column an import reads past on a later run.
+     */
+    public function watermark(): ?string;
+
+    /**
+     * How many rows an import buffers before writing them.
+     */
+    public function importChunk(): int;
+
+    /**
      * Whether this model may use a window function despite being incremental.
      */
     public function allowsWindowFunctions(): bool;
