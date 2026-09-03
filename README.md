@@ -17,11 +17,11 @@ class Revenue extends Model implements AnalyticsModel
 {
     use Analytics;
 
-    public function computes(): string
+    public function computes(): Query
     {
-        return 'select customer_id, sum(amount) as total from '
-            .$this->ref(Order::class)
-            .' group by customer_id';
+        return $this->from(Order::class)
+            ->per('customer_id')
+            ->measure('total', 'sum(amount)');
     }
 }
 ```
@@ -71,85 +71,142 @@ namespace App\Analytics;
 use App\Models\Order;
 use Eznix86\LaravelAnalytics\Concerns\Analytics;
 use Eznix86\LaravelAnalytics\Contracts\AnalyticsModel;
-use Eznix86\LaravelAnalytics\Materialization;
+use Eznix86\LaravelAnalytics\ViewQuery;
 use Illuminate\Database\Eloquent\Model;
 
 class StgOrder extends Model implements AnalyticsModel
 {
     use Analytics;
 
-    public function materialization(): Materialization
+    public function computes(): ViewQuery
     {
-        return Materialization::View;
-    }
-
-    public function computes(): string
-    {
-        return 'select id, customer_id, amount / 100 as amount from '
-            .$this->ref(Order::class)
-            ." where status <> 'cancelled'";
+        return $this->from(Order::class)
+            ->select('id', 'customer_id', 'amount')
+            ->where('status', '<>', 'cancelled')
+            ->view();
     }
 }
 ```
 
-### `ref()`
+`computes()` returns a `Query`, a query builder, or a string of raw SQL. The fluent query is the
+default because it writes the `group by` for you and cannot forget a dependency; see
+[Raw SQL and query builders](#raw-sql-and-query-builders) for the other two, which stay fully
+supported and are the right answer for a `case when` ladder or a window function.
 
-`ref()` returns the relation name to select from, and records the dependency:
+### Dependencies
+
+Passing a model class to `from()` or `join()` is what records the edge in the build graph:
 
 ```php
-$this->ref(StgOrder::class)   // another analytics model: a graph edge
-$this->ref(Order::class)      // a plain Eloquent model: a source, a leaf
+$this->from(StgOrder::class)     // another analytics model: a graph edge
+$this->from(Order::class)        // a plain Eloquent model: a source, a leaf
 ```
 
 Because your Eloquent models already declare where raw data lives, there is no source manifest to maintain.
 
-### Materializations
+Inside a raw fragment, `ref()` does the same job and returns the relation name to select from:
 
-| | Stored | Read speed | Freshness |
-| --- | --- | --- | --- |
-| `Materialization::Table` (default) | every row | fast | as of the last sync |
-| `Materialization::View` | definition only | recomputed per read | always live |
-| `Materialization::Incremental` | every row, topped up | fast | as of the last sync |
-| `Materialization::Microbatch` | every row, rebuilt one time slice at a time | fast | as of the last sync |
-| `Materialization::Snapshot` | one row per version | fast | history, `valid_from` / `valid_to` |
-| `Materialization::Ephemeral` | nothing | n/a | n/a |
+```php
+->whereRaw('id in (select order_id from '.$this->ref(Refund::class).')')
+```
 
-An ephemeral model is never built. It is inlined as a CTE into every model that references it, which makes splitting long SQL into small layered models free. It cannot be queried directly.
+## Writing the query
+
+```php
+public function computes(): Query
+{
+    return $this->from(AdjustedJournalEntries::class, 'j')
+        ->join(StgAccount::class, 'a', 'a.account_id', 'j.account_id')
+        ->per('a.account_code', 'a.account_name', 'a.account_type')
+        ->measure('total_debit', 'sum(j.debit)')
+        ->measure('balance', 'sum(j.adjusted_amount)');
+}
+```
+
+`per()` declares a dimension: it is selected *and* grouped by, so the expression is written once
+instead of once per clause. `measure()` declares an aggregate, which is selected and not grouped.
+`grain()` groups by an expression that is never selected, for a rollup whose output columns differ
+from what it is grouped by:
+
+```php
+->grain(date_trunc('day', 't.created_at'))
+->measure('created_at', 'min(t.created_at)')
+->measure('total', 'count(*)')
+```
+
+A grouped query refuses `select()`. A column that is neither grouped nor aggregated is rejected by
+PostgreSQL and MySQL and silently given an arbitrary row's value by SQLite, so the API does not
+offer the combination — plain columns go in `per()`, aggregates in `measure()`.
+
+Ungrouped models use `select()`, which is also where a window function goes:
+
+```php
+return $this->from(TransByStoreDay::class, 'd')
+    ->select('d.created_at_day', 'd.store_id', 'd.total_transactions',
+        raw('sum(d.total_transactions) over (partition by d.store_id '
+            .'order by d.created_at_day rows between 29 preceding and current row)')->as('transactions_30_day'));
+```
+
+The rest of the surface: `join()` / `leftJoin()` with `on()` for a second condition, `where()` (which
+binds its value) and `whereRaw()`, `orderBy()`, `limit()`, and `pipe()` for a shared fragment.
+
+A `Query` is immutable: every method returns a new query, so a shared base can be handed to several
+models without one of them altering it.
+
+## Materializations
+
+The declared return type of `computes()` is what says how a model is persisted, and it carries the
+configuration that materialization needs:
+
+| `computes()` returns | Stored | Declared with |
+| --- | --- | --- |
+| `Query` | every row | the default |
+| `ViewQuery` | definition only, recomputed per read | `->view()` |
+| `EphemeralQuery` | nothing, inlined as a CTE | `->ephemeral()` |
+| `IncrementalQuery` | every row, topped up | `->incremental(replacing:, since:)` |
+| `MicrobatchQuery` | every row, rebuilt one time slice at a time | `->microbatch($eventTime, $size, begin:)` |
+| `SnapshotQuery` | one row per version, `valid_from` / `valid_to` | `->snapshot(trackedBy:, whenChanged:)` |
+
+A setting that belongs to another materialization does not exist on the query at all: `since()` is
+not callable on a table query, `whenChanged()` is not callable on an incremental one. A wrong
+combination fails to compile rather than being ignored at run time.
+
+An ephemeral model is never built. It is inlined as a CTE into every model that references it, which
+makes splitting long SQL into small layered models free. It cannot be queried directly.
+
+A model that returns raw SQL declares `materialization()` as a method instead, and its `computes()`
+is never called to read configuration, because raw SQL may depend on a compilation state that only a
+real build has.
 
 ### Incremental models
 
 A table is rebuilt from scratch on every sync. An incremental model appends instead, which matters once a full rebuild stops finishing in the window you have.
 
-You write the filter, the same way dbt does. `isIncremental()` is false on the first build and under `--full-refresh`, so the same method serves both:
+`since()` writes the filter for you:
 
 ```php
-public function materialization(): Materialization
+public function computes(): IncrementalQuery
 {
-    return Materialization::Incremental;
-}
-
-public function uniqueKey(): array
-{
-    return ['day', 'name'];
-}
-
-public function computes(): string
-{
-    $sql = 'select '.$this->dateTrunc('day', 'happened_at').' as day, name, count(*) as total from '
-        .$this->ref(Event::class);
-
-    if ($this->isIncremental()) {
-        $sql .= ' where '.$this->dateTrunc('day', 'happened_at')
-            .' >= (select max(day) from '.$this->getTable().')';
-    }
-
-    return $sql.' group by '.$this->dateTrunc('day', 'happened_at').', name';
+    return $this->from(Event::class)
+        ->per(date_trunc('day', 'happened_at')->as('day'), 'name')
+        ->measure('total', 'count(*)')
+        ->incremental(replacing: ['day', 'name'], since: 'day');
 }
 ```
 
-Without `uniqueKey()` the new rows are appended. With one, rows matching that key are deleted first, so a restated day replaces itself instead of doubling. The delete and insert run in one transaction, so a reader never sees the batch missing.
+Without `replacing:` the new rows are appended. With it, rows matching that key are deleted first, so a restated day replaces itself instead of doubling. The delete and insert run in one transaction, so a reader never sees the batch missing.
 
-Override `incrementalStrategy()` to force `IncrementalStrategy::Append` even with a unique key, which is right for an immutable log that has a natural id.
+`since()` compares with `>` when the model appends, so the boundary row is not duplicated, and `>=` when a replace key makes the build replace rows, so a row restated within the boundary period is rebuilt. It uses the dimension expression behind the column when there is one, because no driver accepts a select alias in a `where`. Nothing is added on the build that creates the relation, or under `--full-refresh`.
+
+Anything `since()` cannot express goes in `whenIncremental()`, which is the fluent form of dbt's `is_incremental()` block:
+
+```php
+->whenIncremental(fn (IncrementalQuery $query): IncrementalQuery => $query->whereRaw(
+    'id > (select max(id) from '.$this->getTable().')',
+))
+```
+
+Override `incrementalStrategy()` to force `IncrementalStrategy::Append` even with a replace key, which is right for an immutable log that has a natural id.
 
 If the model's columns drift from the relation it is appending to, the sync stops rather than inserting a shape that does not match. `onSchemaChange()` picks something else: `Ignore` inserts only the shared columns, `AppendNewColumns` adds what the model gained, `SyncAllColumns` also drops what it lost.
 
@@ -180,36 +237,17 @@ Late-arriving rows are yours to handle, as they are in dbt: widen the filter wit
 An incremental model makes you write the filter and choose the lookback. A microbatch model splits the run into time slices instead, rebuilding each one whole. Every batch is independent and idempotent, so rerunning one is always safe:
 
 ```php
-public function materialization(): Materialization
+public function computes(): MicrobatchQuery
 {
-    return Materialization::Microbatch;
-}
-
-public function eventTime(): ?string
-{
-    return 'created_at';
-}
-
-public function batchSize(): BatchSize
-{
-    return BatchSize::Month;
-}
-
-public function begin(): ?string
-{
-    return '2026-01-01';
-}
-
-public function computes(): string
-{
-    return 'select min(t.created_at) as created_at, count(*) as total from '
-        .$this->ref(Transaction::class).' t '
-        .'where '.$this->batchWindow()
-        .' group by '.$this->dateTrunc('day', 't.created_at');
+    return $this->from(Transaction::class, 't')
+        ->grain(date_trunc('day', 't.created_at'))
+        ->measure('created_at', 'min(t.created_at)')
+        ->measure('total', 'count(*)')
+        ->microbatch('created_at', BatchSize::Month, begin: '2026-01-01');
 }
 ```
 
-`batchWindow()` is the half open predicate for the batch being built, so consecutive batches neither overlap nor leave a gap. Place it in your own `where` clause; nothing is spliced into your SQL.
+The window of the batch being built is applied from the event time column, as bound values, with no filter written in the model. It is half open, so consecutive batches neither overlap nor leave a gap. In a raw SQL model, write it yourself with `$this->batchWindow()`.
 
 The first run builds every batch from `begin()` to now. Later runs rebuild the newest stored batch plus `lookback()` behind it, which is how a late arriving row still lands. Each batch deletes its own window and inserts the rebuild, in one transaction.
 
@@ -233,24 +271,11 @@ class StoreHistory extends Model implements AnalyticsModel
 {
     use Analytics;
 
-    public function materialization(): Materialization
+    public function computes(): SnapshotQuery
     {
-        return Materialization::Snapshot;
-    }
-
-    public function uniqueKey(): array
-    {
-        return ['store_id'];
-    }
-
-    public function checkColumns(): array
-    {
-        return ['sqft', 'region', 'is_active'];
-    }
-
-    public function computes(): string
-    {
-        return 'select store_id, sqft, country, region, is_active from '.$this->ref(Store::class);
+        return $this->from(Store::class)
+            ->select('store_id', 'sqft', 'country', 'region', 'is_active')
+            ->snapshot(trackedBy: ['store_id'], whenChanged: ['sqft', 'region', 'is_active']);
     }
 }
 ```
@@ -263,13 +288,13 @@ store=2 sqft=3000  region=London        valid_from=2026-09-03 10:38:47  valid_to
 store=2 sqft=6000  region=Manchester    valid_from=2026-09-03 10:41:02  valid_to=open
 ```
 
-`checkColumns()` narrows what counts as a change; empty watches every non-key column. Comparison is null safe, so a column going to or from null opens a version.
+`whenChanged:` narrows what counts as a change; empty watches every non-key column. Comparison is null safe, so a column going to or from null opens a version.
 
-The reported row count is versions opened, not the size of the table. `uniqueKey()` is required — without it nothing identifies which row a version belongs to, and the resolver says so.
+The reported row count is versions opened, not the size of the table. `trackedBy:` is required — without it nothing identifies which row a version belongs to, and the resolver says so.
 
 **A full refresh leaves snapshots alone**, because their history cannot be recomputed from the source. Aiming `--full-refresh` at a snapshot by name fails outright rather than quietly destroying it.
 
-### Indexes
+## Indexes
 
 `create table as select` produces a table with no indexes, so declare the ones you need and they are rebuilt on every sync:
 
@@ -280,7 +305,7 @@ public function indexes(): array
 }
 ```
 
-### Freshness
+## Freshness
 
 ```php
 public function freshness(): ?string
@@ -294,7 +319,7 @@ Revenue::lastSyncedAt();   // Carbon|null, successful builds only
 Revenue::isStale();        // true once the window has passed
 ```
 
-### Data expectations
+## Data expectations
 
 Declare what must be true of the built data, then check it with `analytics:test`:
 
@@ -327,7 +352,7 @@ Exit code is 1 when anything fails, so it drops straight into CI or a scheduler.
 expect(app(Runner::class)->failures(new TrialBalance))->toBeEmpty();
 ```
 
-### Analytics models are read-only
+## Analytics models are read-only
 
 They are dropped and rebuilt on every sync, so writes throw rather than being silently discarded on the next run.
 
@@ -460,7 +485,7 @@ Register a grammar for a driver the package does not ship:
 app(GrammarManager::class)->extend('clickhouse', ClickHouseGrammar::class);
 ```
 
-### Expressions
+## Expressions
 
 The `$this->` helpers above return a string, so they only work inside a model. The same
 helpers exist as expressions, which carry no driver of their own and resolve one when they
@@ -524,110 +549,30 @@ where it is defined.
 
 The joins those rollups share belong in one wide model they all `ref()`. That resolves the join graph once at build time; the package does not plan joins per query the way a semantic layer such as Cube or dbt's MetricFlow does, so pick the dimension combinations you want and materialize them.
 
-## Fluent models
+## Raw SQL and query builders
 
-`computes()` also accepts a `Query`, which writes the `group by` for you:
+`computes()` also accepts a string of raw SQL, which is the right answer for a `case when` ladder, a
+lateral join, or anything else with no fluent form:
 
 ```php
-public function computes(): Query
+public function materialization(): Materialization
 {
-    return $this->from(AdjustedJournalEntries::class, 'j')
-        ->join(StgAccount::class, 'a', 'a.account_id', 'j.account_id')
-        ->per('a.account_code', 'a.account_name', 'a.account_type')
-        ->measure('total_debit', 'sum(j.debit)')
-        ->measure('balance', 'sum(j.adjusted_amount)');
+    return Materialization::Ephemeral;
+}
+
+public function computes(): string
+{
+    return 'select store_id, '
+        ."case when country in ('MU', 'ZA') then 'AFRICA' else 'OTHER' end as country_group "
+        .'from '.$this->ref(Store::class);
 }
 ```
 
-`per()` declares a dimension: it is selected *and* grouped by, so the expression is written once
-instead of once per clause. `measure()` declares an aggregate, which is selected and not grouped.
-`grain()` groups by an expression that is never selected, for a rollup whose output columns differ
-from what it is grouped by:
+A raw SQL model declares `materialization()` and, where they apply, `uniqueKey()`, `eventTime()`,
+`batchSize()`, `begin()` and `checkColumns()` as methods, and writes its own incremental filter with
+`isIncremental()` and its own batch predicate with `batchWindow()`.
 
-```php
-->grain(date_trunc('day', 't.created_at'))
-->measure('created_at', 'min(t.created_at)')
-->measure('total', 'count(*)')
-```
-
-A grouped query refuses `select()`. A column that is neither grouped nor aggregated is rejected by
-PostgreSQL and MySQL and silently given an arbitrary row's value by SQLite, so the API does not
-offer the combination — plain columns go in `per()`, aggregates in `measure()`.
-
-Ungrouped models use `select()`, which is also where a window function goes:
-
-```php
-return $this->from(TransByStoreDay::class, 'd')
-    ->select('d.created_at_day', 'd.store_id', 'd.total_transactions',
-        raw('sum(d.total_transactions) over (partition by d.store_id '
-            .'order by d.created_at_day rows between 29 preceding and current row)')->as('transactions_30_day'));
-```
-
-The rest of the surface: `join()` / `leftJoin()` with `on()` for a second condition, `where()` (which
-binds its value) and `whereRaw()`, `orderBy()`, `limit()`, and `pipe()` for a shared fragment. Passing
-a model class rather than a table name is what registers the dependency, so a fluent model cannot
-forget `ref()`.
-
-A `Query` is immutable: every method returns a new query, so a shared base can be handed to several
-models without one of them altering it.
-
-### Materialization comes from the return type
-
-The declared return type of `computes()` is what says how a fluent model is persisted, and it carries
-the configuration that would otherwise be spread across overridden methods:
-
-| `computes()` returns | Materialization | Configured with |
-| --- | --- | --- |
-| `Query` | table | |
-| `ViewQuery` | view | `->view()` |
-| `EphemeralQuery` | ephemeral | `->ephemeral()` |
-| `IncrementalQuery` | incremental | `->incremental(replacing:, since:)` |
-| `MicrobatchQuery` | microbatch | `->microbatch($eventTime, $size, begin:)` |
-| `SnapshotQuery` | snapshot | `->snapshot(trackedBy:, whenChanged:)` |
-
-```php
-public function computes(): IncrementalQuery
-{
-    return $this->from(Event::class)
-        ->per(date_trunc('day', 'happened_at')->as('day'), 'name')
-        ->measure('total', 'count(*)')
-        ->incremental(replacing: ['day', 'name'], since: 'day');
-}
-```
-
-That model declares no `materialization()` and no `uniqueKey()`: both are read off the query. The
-return type is also what makes `since()` unavailable on a table query and `whenChanged()` unavailable
-on an incremental one — a wrong combination will not compile rather than being ignored at run time.
-
-A model that returns raw SQL keeps declaring `materialization()` and the rest as methods, and its
-`computes()` is never called to read configuration, because raw SQL may depend on a compilation state
-that only a real build has.
-
-### Incremental runs
-
-`since()` restricts an incremental run to rows past the high water mark of a column, and uses the
-dimension expression behind the column when there is one, because no driver accepts a select alias
-in a `where`.
-
-The comparison follows the incremental strategy: `>` when the model appends, so the boundary row is
-not duplicated, and `>=` when a replace key makes the build replace rows, so a row restated within
-the boundary period is rebuilt. Nothing is added on the build that creates the relation, or on a
-`--full-refresh`.
-
-`whenIncremental()` takes the general case, and is the fluent form of dbt's `is_incremental()` block:
-
-```php
-->whenIncremental(fn (IncrementalQuery $query): IncrementalQuery => $query->whereRaw(
-    'id > (select max(id) from '.$this->getTable().')',
-))
-```
-
-A microbatch model needs neither: the window of the batch being built is applied from its event time,
-as bound values, with no filter written in the model.
-
-## Builder-backed models
-
-`computes()` also accepts a query builder, which is portable for free and reads well for staging models:
+A query builder works too, and is portable for free:
 
 ```php
 public function computes(): string|Builder
@@ -638,7 +583,8 @@ public function computes(): string|Builder
 }
 ```
 
-Window functions and CTEs have no builder form, so aggregation layers are usually plain SQL.
+The two forms mix per model: a fluent model can `ref()` a raw one and the other way round, because
+both resolve to a relation name.
 
 ## Changelog
 
