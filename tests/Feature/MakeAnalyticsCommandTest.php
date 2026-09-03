@@ -25,7 +25,9 @@ it('generates an analytics model at the configured path and namespace', function
         ->toContain('namespace Playground\\Analytics;')
         ->toContain('class Churn extends Model')
         ->toContain('use Analytics;')
-        ->toContain('public function computes(): string');
+        ->toContain('public function computes(): Query')
+        ->toContain('->per(')
+        ->toContain('->measure(');
 });
 
 it('generates into a nested namespace that mirrors the directory', function () {
