@@ -362,6 +362,15 @@ The rows are read in chunks and upserted, so a rerun replaces rather than double
 past the highest value already stored, and `--full-refresh` empties the table and reads everything
 again. Downstream models on `pgsql` then reference `ImportedEvents` like any other model.
 
+**`since:` only looks forward.** A row deleted at the source stays in the copy, and a row updated
+below the high water mark is not picked up. Neither produces an error, so decide deliberately:
+
+- leave `since:` off, and every run reads the whole source and upserts it, which catches updates but
+  still not deletes
+- schedule a periodic `analytics:sync ImportedEvents --only --full-refresh`, which empties the table
+  and reads everything again, which catches both
+- keep `since:` on an append only source, such as an event log, where neither can happen
+
 Four things it refuses, each with the fix in the message:
 
 - a target table that does not exist, because an import never creates one
