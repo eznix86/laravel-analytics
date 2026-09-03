@@ -80,6 +80,8 @@ Revenue::query()
 
 The result is a real database relation that Laravel can query like any other Eloquent model.
 
+Try a demo: [https://github.com/eznix86/laravel-analytics-demo](https://github.com/eznix86/laravel-analytics-demo)
+
 ## Installation
 
 ```bash
