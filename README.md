@@ -71,27 +71,32 @@ namespace App\Analytics;
 use App\Models\Order;
 use Eznix86\LaravelAnalytics\Concerns\Analytics;
 use Eznix86\LaravelAnalytics\Contracts\AnalyticsModel;
-use Eznix86\LaravelAnalytics\ViewQuery;
+use Eznix86\LaravelAnalytics\Query;
 use Illuminate\Database\Eloquent\Model;
 
-class StgOrder extends Model implements AnalyticsModel
+use function Eznix86\LaravelAnalytics\date_trunc;
+
+class Revenue extends Model implements AnalyticsModel
 {
     use Analytics;
 
-    public function computes(): ViewQuery
+    public function computes(): Query
     {
         return $this->from(Order::class)
-            ->select('id', 'customer_id', 'amount')
             ->where('status', '<>', 'cancelled')
-            ->view();
+            ->per('customer_id', date_trunc('month', 'placed_at')->as('month'))
+            ->measure('total', 'sum(amount)');
     }
 }
 ```
 
-`computes()` returns a `Query`, a query builder, or a string of raw SQL. The fluent query is the
-default because it writes the `group by` for you and cannot forget a dependency; see
-[Raw SQL and query builders](#raw-sql-and-query-builders) for the other two, which stay fully
-supported and are the right answer for a `case when` ladder or a window function.
+`date_trunc()` is one of the [expressions](#expressions) that translate themselves per driver. They
+are namespaced functions, so import them with `use function`.
+
+`computes()` returns a `Query`, a query builder, or a string of raw SQL. Start with the query: it
+writes the `group by` for you and cannot forget a dependency. The other two are fully supported and
+are the right answer for a `case when` ladder or a window function. See
+[Raw SQL and query builders](#raw-sql-and-query-builders).
 
 ### Dependencies
 
@@ -136,7 +141,7 @@ from what it is grouped by:
 
 A grouped query refuses `select()`. A column that is neither grouped nor aggregated is rejected by
 PostgreSQL and MySQL and silently given an arbitrary row's value by SQLite, so the API does not
-offer the combination — plain columns go in `per()`, aggregates in `measure()`.
+offer the combination. Plain columns go in `per()`, aggregates in `measure()`.
 
 Ungrouped models use `select()`, which is also where a window function goes:
 
@@ -167,16 +172,16 @@ configuration that materialization needs:
 | `MicrobatchQuery` | every row, rebuilt one time slice at a time | `->microbatch($eventTime, $size, begin:)` |
 | `SnapshotQuery` | one row per version, `valid_from` / `valid_to` | `->snapshot(trackedBy:, whenChanged:)` |
 
-A setting that belongs to another materialization does not exist on the query at all: `since()` is
-not callable on a table query, `whenChanged()` is not callable on an incremental one. A wrong
-combination fails to compile rather than being ignored at run time.
+A setting from another materialization is not on the query at all. You cannot call `since()` on a
+table query, or `whenChanged()` on an incremental one. A wrong combination fails to compile instead
+of being ignored at run time.
 
 An ephemeral model is never built. It is inlined as a CTE into every model that references it, which
 makes splitting long SQL into small layered models free. It cannot be queried directly.
 
-A model that returns raw SQL declares `materialization()` as a method instead, and its `computes()`
-is never called to read configuration, because raw SQL may depend on a compilation state that only a
-real build has.
+A model that returns raw SQL declares `materialization()` as a method instead. Its `computes()` is
+never called just to read configuration, because raw SQL can depend on things that only exist during
+a real build.
 
 ### Incremental models
 
@@ -196,7 +201,14 @@ public function computes(): IncrementalQuery
 
 Without `replacing:` the new rows are appended. With it, rows matching that key are deleted first, so a restated day replaces itself instead of doubling. The delete and insert run in one transaction, so a reader never sees the batch missing.
 
-`since()` compares with `>` when the model appends, so the boundary row is not duplicated, and `>=` when a replace key makes the build replace rows, so a row restated within the boundary period is rebuilt. It uses the dimension expression behind the column when there is one, because no driver accepts a select alias in a `where`. Nothing is added on the build that creates the relation, or under `--full-refresh`.
+The comparison depends on the strategy. A model that appends uses `>`, so the boundary row is not
+counted twice. A model with a replace key uses `>=`, so a row restated in the boundary period is
+rebuilt.
+
+If the column is a dimension, `since()` compares its expression, not its alias. No driver accepts a
+select alias in a `where`.
+
+Nothing is added on the build that creates the relation, or under `--full-refresh`.
 
 Anything `since()` cannot express goes in `whenIncremental()`, which is the fluent form of dbt's `is_incremental()` block:
 
@@ -230,11 +242,11 @@ Fix one of:
   - override allowsWindowFunctions() to return true, if you have reasoned about the boundary yourself
 ```
 
-Late-arriving rows are yours to handle, as they are in dbt: widen the filter with the lookback your data needs.
+Late-arriving rows are yours to handle, as they are in dbt. A row that lands behind the high water mark is not picked up, so either widen the window with `whenIncremental()`, or use a microbatch model, which rebuilds whole time slices and has a lookback for exactly this.
 
 ### Microbatch
 
-An incremental model makes you write the filter and choose the lookback. A microbatch model splits the run into time slices instead, rebuilding each one whole. Every batch is independent and idempotent, so rerunning one is always safe:
+An incremental model tops up from a high water mark. A microbatch model splits the run into time slices instead, rebuilding each one whole. Every batch is independent and idempotent, so rerunning one is always safe:
 
 ```php
 public function computes(): MicrobatchQuery
@@ -243,13 +255,13 @@ public function computes(): MicrobatchQuery
         ->grain(date_trunc('day', 't.created_at'))
         ->measure('created_at', 'min(t.created_at)')
         ->measure('total', 'count(*)')
-        ->microbatch('created_at', BatchSize::Month, begin: '2026-01-01');
+        ->microbatch('created_at', BatchSize::Month, begin: '2026-01-01', lookback: 1);
 }
 ```
 
 The window of the batch being built is applied from the event time column, as bound values, with no filter written in the model. It is half open, so consecutive batches neither overlap nor leave a gap. In a raw SQL model, write it yourself with `$this->batchWindow()`.
 
-The first run builds every batch from `begin()` to now. Later runs rebuild the newest stored batch plus `lookback()` behind it, which is how a late arriving row still lands. Each batch deletes its own window and inserts the rebuild, in one transaction.
+The first run builds every batch from `begin:` to now. Later runs rebuild the newest stored batch plus `lookback:` batches behind it, which is how a late arriving row still lands. Each batch deletes its own window and inserts the rebuild, in one transaction.
 
 Batch size and output grain are independent: monthly batches producing daily rows is fine, and often what you want.
 
@@ -260,7 +272,7 @@ php artisan analytics:sync DailyTransactions --only \
     --event-time-start=2026-01-01 --event-time-end=2026-01-31
 ```
 
-**The event time column must hold a full timestamp.** SQLite's date functions return ten characters, which sort before a nineteen character window bound and would never match — select `min(created_at)` rather than a truncated date.
+**The event time column must hold a full timestamp.** SQLite's date functions return ten characters, which sort before a nineteen character window bound and would never match. Select `min(created_at)` rather than a truncated date.
 
 ### Snapshots
 
@@ -290,7 +302,7 @@ store=2 sqft=6000  region=Manchester    valid_from=2026-09-03 10:41:02  valid_to
 
 `whenChanged:` narrows what counts as a change; empty watches every non-key column. Comparison is null safe, so a column going to or from null opens a version.
 
-The reported row count is versions opened, not the size of the table. `trackedBy:` is required — without it nothing identifies which row a version belongs to, and the resolver says so.
+The reported row count is versions opened, not the size of the table. `trackedBy:` is required. Without it nothing identifies which row a version belongs to, and the resolver says so.
 
 **A full refresh leaves snapshots alone**, because their history cannot be recomputed from the source. Aiming `--full-refresh` at a snapshot by name fails outright rather than quietly destroying it.
 
@@ -376,7 +388,7 @@ php artisan analytics:test TrialBalance
 php artisan analytics:prune                        # drop sync history past the retention window
 ```
 
-`analytics:graph` groups models into waves. Everything inside a wave depends only on earlier waves, so `--parallel` builds a wave at once, starting the next model as soon as a worker frees up. Each worker is a separate `artisan` process with its own connection, so it costs a Laravel boot per model — worth it when models take seconds, not milliseconds:
+`analytics:graph` groups models into waves. Everything inside a wave depends only on earlier waves, so `--parallel` builds a wave at once, starting the next model as soon as a worker frees up. Each worker is a separate `artisan` process with its own connection, so it costs a Laravel boot per model. That is worth it when models take seconds, not milliseconds:
 
 ```
 16 models, four of them 2s each
@@ -428,7 +440,7 @@ Schedule::command('analytics:test')->dailyAt('03:30');
 Schedule::command('analytics:prune')->weekly();
 ```
 
-`analytics:prune` walks every connection your analytics models use, skipping any that has no run log. The model uses Laravel's `MassPrunable`, so `php artisan model:prune --model="Eznix86\LaravelAnalytics\Models\AnalyticsRun"` works too — but it only prunes one connection, which is why the dedicated command exists. Set `retention` to `null` to keep history forever.
+`analytics:prune` walks every connection your analytics models use, skipping any that has no run log. The model uses Laravel's `MassPrunable`, so `php artisan model:prune --model="Eznix86\LaravelAnalytics\Models\AnalyticsRun"` works too, but it only prunes one connection, which is why the dedicated command exists. Set `retention` to `null` to keep history forever.
 
 ## Connections
 
@@ -466,9 +478,40 @@ That stays one Laravel connection, so `ref()` accepts it. PostgreSQL cannot join
 
 ## Cross-driver SQL
 
-The package guarantees cross-driver *orchestration*: DDL, atomic swaps, index rebuilds, build order and freshness work the same on PostgreSQL, MySQL/MariaDB and SQLite. The SQL inside `computes()` is yours.
+The package guarantees cross-driver *orchestration*: DDL, atomic swaps, index rebuilds, build order
+and freshness work the same on PostgreSQL, MySQL/MariaDB and SQLite. The SQL inside `computes()` is
+yours.
 
-Where a dialect difference is unavoidable, use the driver-aware helpers:
+Where a dialect difference is unavoidable, use an expression. Expressions carry no driver of their
+own and resolve one when they are compiled, so the same object becomes `date_trunc` on PostgreSQL,
+`date_format` on MySQL and `strftime` on SQLite:
+
+```php
+use function Eznix86\LaravelAnalytics\{cast, date_add, date_diff, date_spine, date_trunc, raw, string_agg};
+
+date_trunc('month', 'created_at')->as('month');
+cast('debit', 'bigint');                    // 'signed' on MySQL, 'integer' on SQLite
+raw('%s / nullif(%s, 0)', cast('total', 'decimal(18,4)'), 'customers');
+```
+
+Expressions nest, so an expression can be an argument to another one, and they go anywhere a column
+does: `per()`, `measure()`, `select()`, or a query builder:
+
+```php
+->per(date_trunc('month', 'created_at')->as('month'))
+->measure('names', string_agg('name', ', '))
+
+DB::table($this->ref(Order::class))->select(date_trunc('month', 'created_at'));
+```
+
+`raw()` substitutes `%s` placeholders with rendered operands, and refuses to render when the number
+of placeholders and operands disagree. With no operands the fragment is passed through untouched, so
+`raw("name like '%sale%'")` means what it says.
+
+### Inside a raw SQL model
+
+A string model cannot hold an expression object, so the same helpers exist as methods that return a
+string, using the model's own connection:
 
 ```php
 $this->dateTrunc('month', 'created_at');
@@ -476,78 +519,62 @@ $this->dateAdd('day', 7, 'created_at');
 $this->dateDiff('day', 'start', 'end');
 $this->dateSpine('month', "'2026-01-01'", 'current_date');
 $this->stringAgg('name', ', ');
-$this->castAs('debit', 'bigint');   // 'signed' on MySQL, 'integer' on SQLite
+$this->castAs('debit', 'bigint');
 ```
 
-Register a grammar for a driver the package does not ship:
+`$this->render()` turns an expression into a string the same way, which is how a shared metric can
+return an expression and still be used in raw SQL.
+
+### Registering a driver
 
 ```php
 app(GrammarManager::class)->extend('clickhouse', ClickHouseGrammar::class);
 ```
 
-## Expressions
+## Sharing a metric
 
-The `$this->` helpers above return a string, so they only work inside a model. The same
-helpers exist as expressions, which carry no driver of their own and resolve one when they
-are compiled:
-
-```php
-use function Eznix86\LaravelAnalytics\{cast, date_trunc, date_add, date_diff, date_spine, raw, string_agg};
-
-date_trunc('month', 'created_at')->as('month');
-cast('debit', 'bigint');
-raw('%s / nullif(%s, 0)', cast('total', 'decimal(18,4)'), 'customers');
-```
-
-Expressions nest, so an expression can be an argument to another one. Render them with
-`$this->render()` inside a string model, or hand them straight to a query builder:
-
-```php
-'select '.$this->render(date_trunc('month', 'created_at')).' as month from '.$this->ref(Order::class);
-
-DB::table($this->ref(Order::class))->select(date_trunc('month', 'created_at'));
-```
-
-In a builder the driver comes from the connection the query runs on, so the same expression
-compiles to `date_trunc` on PostgreSQL, `date_format` on MySQL and `strftime` on SQLite.
-
-`raw()` substitutes `%s` placeholders with rendered operands, and refuses to render when the
-number of placeholders and operands disagree. With no operands the fragment is passed through
-untouched, so `raw("name like '%sale%'")` means what it says.
-
-## Defining a metric once
-
-A metric is just a PHP method. Define it in one place and roll it up along whatever dimensions you need:
+This is a convention, not a feature. A metric is a static method that returns a SQL fragment. Write
+the arithmetic once, and every rollup that uses it gives the same answer.
 
 ```php
 final class Metrics
 {
-    public static function totalTransactions(): string
+    public static function totalTransactions(string $alias = 't'): string
     {
-        return 'count(distinct t.transaction_id)';
+        return "count(distinct {$alias}.transaction_id)";
     }
 
-    public static function transPerCust(): Expression
+    public static function transPerCust(string $alias = 't'): Expression
     {
         return raw(
             '%s / nullif(%s, 0)',
-            cast(self::totalTransactions(), 'decimal(18,4)'),
-            'count(distinct t.customer_id)',
+            cast(self::totalTransactions($alias), 'decimal(18,4)'),
+            "count(distinct {$alias}.customer_id)",
         );
     }
 }
 ```
 
 ```php
-// one rollup by brand and month, another by store and day, same definition
-$this->render(Metrics::transPerCust()).' as trans_per_cust '
+// one rollup by brand and month, another by store and day, the same definition
+->measure('trans_per_cust', Metrics::transPerCust())
 ```
 
-A metric that needs a driver-aware fragment returns an expression rather than a string, so it
-never has to be handed a `Grammar`. The connection is decided where the metric is used, not
-where it is defined.
+**Take the alias as a parameter.** A fragment like `count(distinct t.transaction_id)` silently
+requires every caller to alias its source `t`; a caller that aliases something else gets a wrong
+number with no error.
 
-The joins those rollups share belong in one wide model they all `ref()`. That resolves the join graph once at build time; the package does not plan joins per query the way a semantic layer such as Cube or dbt's MetricFlow does, so pick the dimension combinations you want and materialize them.
+**Worth it when** the metric appears in two or more models and its definition is not obvious: a
+ratio, a filtered count, anything where two copies could drift apart unnoticed. A metric used once,
+or one that reads as plainly as its name, is clearer inlined.
+
+The package adds one thing here. A metric that needs a driver-aware fragment returns an
+`Expression` instead of a string, so it never has to be handed a `Grammar`. The connection is decided
+where the metric is used, not where it is written.
+
+The joins those rollups share belong in one wide model they all read from. That resolves the join
+graph once at build time; the package does not plan joins per query the way a semantic layer such as
+Cube or dbt's MetricFlow does, so pick the dimension combinations you want and materialize them.
 
 ## Raw SQL and query builders
 
