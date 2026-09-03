@@ -11,6 +11,8 @@ metadata:
 
 Use this skill when a Laravel application needs analytics tables that are derived from other tables, rebuilt on a schedule, and read through Eloquent.
 
+The package brings dbt's way of working to Laravel. Each model is one SELECT, the package resolves what depends on what, and `analytics:sync` builds them in order on the application's own database connections. There is no Python and no separate profile to configure.
+
 ## Primary Goal
 
 - apply the `eznix86/laravel-analytics` package's public API in the smallest correct way

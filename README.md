@@ -12,6 +12,22 @@
 
 Define analytics tables as Eloquent models, build them in dependency order, and query them with Eloquent.
 
+This brings dbt's way of working to Laravel. dbt, short for data build tool, is the standard way data
+teams turn raw tables into analytics tables: you write one SELECT per model, and the tool works out
+what depends on what and builds them in order. This package does the same job in PHP, against the
+database connections your application already has.
+
+What it is for:
+
+- **Write a definition once.** A model is a SELECT that other models reference. Change it in one
+  place and the change reaches everything downstream on the next sync, so business logic is not
+  copied into six dashboards.
+- **Rebuild without fear.** A sync is safe to rerun. New data is always assembled first and put in
+  place in one step, so a failed or repeated run does not leave readers with a half built table.
+- **Keep it inside the app.** Models live in `app/Analytics` and are read back with ordinary
+  Eloquent. PostgreSQL, MySQL, MariaDB and SQLite are supported, and independent chains can each sit
+  on their own connection.
+
 ```php
 class Revenue extends Model implements AnalyticsModel
 {
