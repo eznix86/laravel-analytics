@@ -1,0 +1,21 @@
+<?php
+
+declare(strict_types=1);
+
+namespace {{ namespace }};
+
+use Eznix86\LaravelAnalytics\Concerns\Analytics;
+use Eznix86\LaravelAnalytics\Contracts\AnalyticsModel;
+use Illuminate\Database\Eloquent\Model;
+
+class {{ class }} extends Model implements AnalyticsModel
+{
+    use Analytics;
+
+    public function computes(): string
+    {
+        return <<<'SQL'
+            select 1 as placeholder
+        SQL;
+    }
+}
