@@ -14,6 +14,7 @@ use Eznix86\LaravelAnalytics\Exceptions\NotQueryable;
 use Eznix86\LaravelAnalytics\Exceptions\OutsideBatch;
 use Eznix86\LaravelAnalytics\Exceptions\OutsideCompilation;
 use Eznix86\LaravelAnalytics\Exceptions\ReadOnlyModel;
+use Eznix86\LaravelAnalytics\Expressions\Expression;
 use Eznix86\LaravelAnalytics\Grammars\Grammar;
 use Eznix86\LaravelAnalytics\Grammars\GrammarManager;
 use Eznix86\LaravelAnalytics\IncrementalStrategy;
@@ -313,6 +314,13 @@ trait Analytics
     protected function castAs(string $expression, string $type): string
     {
         return $this->grammar()->cast($expression, $type);
+    }
+
+    protected function render(Expression|string $expression): string
+    {
+        return $expression instanceof Expression
+            ? $expression->render($this->grammar())
+            : $expression;
     }
 
     protected function performInsert(EloquentBuilder $query): bool

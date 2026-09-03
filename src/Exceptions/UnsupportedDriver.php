@@ -23,4 +23,19 @@ class UnsupportedDriver extends RuntimeException
             $driver,
         ));
     }
+
+    /**
+     * @param  list<string>  $supported
+     */
+    public static function forQueryGrammar(string $grammar, array $supported): self
+    {
+        sort($supported);
+
+        return new self(sprintf(
+            "No analytics grammar matches the query grammar [%s]. Supported drivers are: %s.\n\n".
+            'Register one with Analytics::extendGrammar(\'your-driver\', YourGrammar::class) in a service provider.',
+            $grammar,
+            implode(', ', $supported),
+        ));
+    }
 }

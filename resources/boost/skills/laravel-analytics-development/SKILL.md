@@ -106,7 +106,7 @@ Revenue::isStale();
 
 ### 6. Handle dialect differences
 
-Use the driver-aware helpers inside `computes()` rather than hard-coding one database's functions: `dateTrunc`, `dateAdd`, `dateDiff`, `dateSpine`, `stringAgg`, `castAs`. Register an unsupported driver with `app(GrammarManager::class)->extend('clickhouse', ClickHouseGrammar::class)`.
+Use the driver-aware helpers inside `computes()` rather than hard-coding one database's functions: `$this->dateTrunc`, `dateAdd`, `dateDiff`, `dateSpine`, `stringAgg`, `castAs`. Outside a model — in a shared metric class, or in a query builder — use the expression form of the same helpers (`Eznix86\LaravelAnalytics\{date_trunc, date_add, date_diff, date_spine, string_agg, cast, raw}`), which resolves the driver when it is compiled instead of being handed one. Expressions nest, carry an `->as()` alias, and render inside a string model with `$this->render($expression)`. Register an unsupported driver with `app(GrammarManager::class)->extend('clickhouse', ClickHouseGrammar::class)`.
 
 ## Rules, References, and Templates
 

@@ -460,9 +460,39 @@ Register a grammar for a driver the package does not ship:
 app(GrammarManager::class)->extend('clickhouse', ClickHouseGrammar::class);
 ```
 
+### Expressions
+
+The `$this->` helpers above return a string, so they only work inside a model. The same
+helpers exist as expressions, which carry no driver of their own and resolve one when they
+are compiled:
+
+```php
+use function Eznix86\LaravelAnalytics\{cast, date_trunc, date_add, date_diff, date_spine, raw, string_agg};
+
+date_trunc('month', 'created_at')->as('month');
+cast('debit', 'bigint');
+raw('%s / nullif(%s, 0)', cast('total', 'decimal(18,4)'), 'customers');
+```
+
+Expressions nest, so an expression can be an argument to another one. Render them with
+`$this->render()` inside a string model, or hand them straight to a query builder:
+
+```php
+'select '.$this->render(date_trunc('month', 'created_at')).' as month from '.$this->ref(Order::class);
+
+DB::table($this->ref(Order::class))->select(date_trunc('month', 'created_at'));
+```
+
+In a builder the driver comes from the connection the query runs on, so the same expression
+compiles to `date_trunc` on PostgreSQL, `date_format` on MySQL and `strftime` on SQLite.
+
+`raw()` substitutes `%s` placeholders with rendered operands, and refuses to render when the
+number of placeholders and operands disagree. With no operands the fragment is passed through
+untouched, so `raw("name like '%sale%'")` means what it says.
+
 ## Defining a metric once
 
-`computes()` returns a string, so a metric is just a PHP method. Define it in one place and roll it up along whatever dimensions you need:
+A metric is just a PHP method. Define it in one place and roll it up along whatever dimensions you need:
 
 ```php
 final class Metrics
@@ -472,20 +502,25 @@ final class Metrics
         return 'count(distinct t.transaction_id)';
     }
 
-    public static function transPerCust(Grammar $grammar): string
+    public static function transPerCust(): Expression
     {
-        return $grammar->cast(self::totalTransactions(), 'decimal(18,4)')
-            .' / nullif(count(distinct t.customer_id), 0)';
+        return raw(
+            '%s / nullif(%s, 0)',
+            cast(self::totalTransactions(), 'decimal(18,4)'),
+            'count(distinct t.customer_id)',
+        );
     }
 }
 ```
 
 ```php
 // one rollup by brand and month, another by store and day, same definition
-Metrics::transPerCust($this->grammar()).' as trans_per_cust '
+$this->render(Metrics::transPerCust()).' as trans_per_cust '
 ```
 
-Metrics that need a driver-aware fragment take the `Grammar` from `$this->grammar()`, which is public on every analytics model.
+A metric that needs a driver-aware fragment returns an expression rather than a string, so it
+never has to be handed a `Grammar`. The connection is decided where the metric is used, not
+where it is defined.
 
 The joins those rollups share belong in one wide model they all `ref()`. That resolves the join graph once at build time; the package does not plan joins per query the way a semantic layer such as Cube or dbt's MetricFlow does, so pick the dimension combinations you want and materialize them.
 

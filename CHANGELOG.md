@@ -23,6 +23,7 @@
 - A guard refusing an incremental model whose SQL contains a window function, unless `allowsWindowFunctions()` says otherwise.
 - `analytics:prune` and a `retention` window, removing old sync history across every connection; `AnalyticsRun` uses Laravel's `MassPrunable`.
 - Data expectations declared with `expectations()` and checked by `analytics:test`: `unique`, `notNull`, `acceptedValues`, `expression` and `relationship`.
+- Expressions that resolve their driver when compiled rather than being handed one: `date_trunc()`, `date_add()`, `date_diff()`, `date_spine()`, `string_agg()`, `cast()` and `raw()` under `Eznix86\LaravelAnalytics`. They nest, take an `->as()` alias, compile inside a query builder, and render inside a string model with `$this->render()`, so a shared metric no longer takes a `Grammar` argument.
 
 ### Changed
 
