@@ -13,27 +13,42 @@ use Eznix86\LaravelAnalytics\Compilation\Context;
 use Eznix86\LaravelAnalytics\Exceptions\NotQueryable;
 use Eznix86\LaravelAnalytics\Exceptions\OutsideBatch;
 use Eznix86\LaravelAnalytics\Exceptions\OutsideCompilation;
+use Eznix86\LaravelAnalytics\Exceptions\QueryConfiguration;
 use Eznix86\LaravelAnalytics\Exceptions\ReadOnlyModel;
 use Eznix86\LaravelAnalytics\Expressions\Expression;
 use Eznix86\LaravelAnalytics\Grammars\Grammar;
 use Eznix86\LaravelAnalytics\Grammars\GrammarManager;
+use Eznix86\LaravelAnalytics\IncrementalQuery;
 use Eznix86\LaravelAnalytics\IncrementalStrategy;
 use Eznix86\LaravelAnalytics\Materialization;
+use Eznix86\LaravelAnalytics\MicrobatchQuery;
 use Eznix86\LaravelAnalytics\Models\AnalyticsRun;
 use Eznix86\LaravelAnalytics\Query;
 use Eznix86\LaravelAnalytics\RunStatus;
 use Eznix86\LaravelAnalytics\SchemaChange;
+use Eznix86\LaravelAnalytics\SnapshotQuery;
 use Eznix86\LaravelAnalytics\Testing\Expectation;
 use Illuminate\Contracts\Database\Query\Builder;
 use Illuminate\Database\Eloquent\Builder as EloquentBuilder;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
+use ReflectionMethod;
+use ReflectionNamedType;
 use UnitEnum;
 
 trait Analytics
 {
     protected ?Context $analyticsContext = null;
+
+    protected ?Query $analyticsConfiguration = null;
+
+    protected bool $readingAnalyticsConfiguration = false;
+
+    /**
+     * @var array<class-string, class-string<Query>|null>
+     */
+    protected static array $analyticsQueryClasses = [];
 
     /**
      * The SQL this model is built from.
@@ -42,7 +57,9 @@ trait Analytics
 
     public function materialization(): Materialization
     {
-        return Materialization::Table;
+        $query = $this->declaredQueryClass();
+
+        return $query === null ? Materialization::Table : $query::materialization();
     }
 
     /**
@@ -80,7 +97,11 @@ trait Analytics
      */
     public function uniqueKey(): array
     {
-        return [];
+        $query = $this->analyticsConfiguration();
+
+        return $query instanceof IncrementalQuery || $query instanceof SnapshotQuery
+            ? $query->uniqueKey()
+            : [];
     }
 
     /**
@@ -117,27 +138,37 @@ trait Analytics
      */
     public function checkColumns(): array
     {
-        return [];
+        $query = $this->analyticsConfiguration();
+
+        return $query instanceof SnapshotQuery ? $query->checkColumns() : [];
     }
 
     public function eventTime(): ?string
     {
-        return null;
+        $query = $this->analyticsConfiguration();
+
+        return $query instanceof MicrobatchQuery ? $query->eventTime() : null;
     }
 
     public function batchSize(): BatchSize
     {
-        return BatchSize::Day;
+        $query = $this->analyticsConfiguration();
+
+        return $query instanceof MicrobatchQuery ? $query->batchSize() : BatchSize::Day;
     }
 
     public function lookback(): int
     {
-        return 1;
+        $query = $this->analyticsConfiguration();
+
+        return $query instanceof MicrobatchQuery ? $query->lookback() : 1;
     }
 
     public function begin(): ?string
     {
-        return null;
+        $query = $this->analyticsConfiguration();
+
+        return $query instanceof MicrobatchQuery ? $query->begin() : null;
     }
 
     /**
@@ -281,6 +312,59 @@ trait Analytics
     protected function from(string $model, ?string $alias = null): Query
     {
         return Query::from($model, $alias);
+    }
+
+    /**
+     * The declared return type of computes() is what says how a fluent model is persisted,
+     * and whether calling computes() to read its configuration is safe at all: a model
+     * returning raw SQL may depend on a compilation state that only a real build has.
+     *
+     * @return class-string<Query>|null
+     */
+    protected function declaredQueryClass(): ?string
+    {
+        if (array_key_exists(static::class, static::$analyticsQueryClasses)) {
+            return static::$analyticsQueryClasses[static::class];
+        }
+
+        $type = (new ReflectionMethod(static::class, 'computes'))->getReturnType();
+        $name = $type instanceof ReflectionNamedType ? $type->getName() : '';
+
+        return static::$analyticsQueryClasses[static::class] = $name === Query::class || is_subclass_of($name, Query::class)
+            ? $name
+            : null;
+    }
+
+    /**
+     * The query computes() returns, which is where a fluent model keeps the configuration
+     * the engine would otherwise read from an overridden method.
+     */
+    protected function analyticsConfiguration(): ?Query
+    {
+        if ($this->analyticsConfiguration instanceof Query) {
+            return $this->analyticsConfiguration;
+        }
+
+        if ($this->declaredQueryClass() === null) {
+            return null;
+        }
+
+        if ($this->readingAnalyticsConfiguration) {
+            throw QueryConfiguration::cycle(static::class);
+        }
+
+        $previous = $this->analyticsContext;
+        $this->readingAnalyticsConfiguration = true;
+        $this->usingCompilationContext($previous ?? new Context);
+
+        try {
+            $computed = $this->computes();
+        } finally {
+            $this->usingCompilationContext($previous);
+            $this->readingAnalyticsConfiguration = false;
+        }
+
+        return $this->analyticsConfiguration = $computed instanceof Query ? $computed : null;
     }
 
     /**

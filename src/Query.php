@@ -15,7 +15,7 @@ use Eznix86\LaravelAnalytics\Grammars\Grammar;
 use Illuminate\Database\Eloquent\Model;
 use InvalidArgumentException;
 
-final class Query
+class Query
 {
     /**
      * @var list<array{type: string, model: class-string<Model>, alias: ?string, conditions: list<array{string, string}>}>
@@ -60,18 +60,11 @@ final class Query
     private ?int $limit = null;
 
     /**
-     * @var list<callable(self): self>
-     */
-    private array $incrementally = [];
-
-    private ?string $since = null;
-
-    /**
      * @param  class-string<Model>  $model
      */
-    private function __construct(
-        private readonly string $model,
-        private readonly ?string $alias,
+    protected function __construct(
+        protected readonly string $model,
+        protected readonly ?string $alias,
     ) {}
 
     /**
@@ -83,9 +76,17 @@ final class Query
     }
 
     /**
+     * How a model returning this query is persisted.
+     */
+    public static function materialization(): Materialization
+    {
+        return Materialization::Table;
+    }
+
+    /**
      * @param  class-string<Model>  $model
      */
-    public function join(string $model, ?string $alias = null, ?string $first = null, ?string $second = null): self
+    public function join(string $model, ?string $alias = null, ?string $first = null, ?string $second = null): static
     {
         return $this->addJoin('inner', $model, $alias, $first, $second);
     }
@@ -93,7 +94,7 @@ final class Query
     /**
      * @param  class-string<Model>  $model
      */
-    public function leftJoin(string $model, ?string $alias = null, ?string $first = null, ?string $second = null): self
+    public function leftJoin(string $model, ?string $alias = null, ?string $first = null, ?string $second = null): static
     {
         return $this->addJoin('left', $model, $alias, $first, $second);
     }
@@ -101,7 +102,7 @@ final class Query
     /**
      * A second and further condition on the join that was just declared.
      */
-    public function on(string $first, string $second): self
+    public function on(string $first, string $second): static
     {
         if ($this->joins === []) {
             throw OutsideJoin::for($first, $second);
@@ -113,7 +114,7 @@ final class Query
         });
     }
 
-    public function where(string $column, mixed $operator = null, mixed $value = null): self
+    public function where(string $column, mixed $operator = null, mixed $value = null): static
     {
         if (func_num_args() === 2) {
             $value = $operator;
@@ -134,14 +135,14 @@ final class Query
         });
     }
 
-    public function whereRaw(string $sql): self
+    public function whereRaw(string $sql): static
     {
         return $this->mutate(static function (self $query) use ($sql): void {
             $query->wheres[] = $sql;
         });
     }
 
-    public function select(Expression|string ...$columns): self
+    public function select(Expression|string ...$columns): static
     {
         if ($this->isGrouped()) {
             throw GroupedSelect::make();
@@ -155,7 +156,7 @@ final class Query
     /**
      * Dimensions, which are selected and grouped by in one statement.
      */
-    public function per(Expression|string ...$dimensions): self
+    public function per(Expression|string ...$dimensions): static
     {
         if ($this->selects !== []) {
             throw GroupedSelect::make();
@@ -170,7 +171,7 @@ final class Query
      * A grouping key that is not selected, for a rollup whose output columns differ
      * from the expression it is grouped by.
      */
-    public function grain(Expression|string ...$expressions): self
+    public function grain(Expression|string ...$expressions): static
     {
         if ($this->selects !== []) {
             throw GroupedSelect::make();
@@ -181,45 +182,21 @@ final class Query
         });
     }
 
-    public function measure(string $alias, Expression|string $expression): self
+    public function measure(string $alias, Expression|string $expression): static
     {
         return $this->mutate(static function (self $query) use ($alias, $expression): void {
             $query->measures[] = [$alias, $expression];
         });
     }
 
-    /**
-     * Applied only on a run that appends to an existing incremental relation, which is
-     * the fluent form of dbt's is_incremental() block.
-     *
-     * @param  callable(self): self  $callback
-     */
-    public function whenIncremental(callable $callback): self
-    {
-        return $this->mutate(static function (self $query) use ($callback): void {
-            $query->incrementally[] = $callback;
-        });
-    }
-
-    /**
-     * Restrict an incremental run to rows past the high water mark of $column, using the
-     * dimension expression behind the column when there is one.
-     */
-    public function since(string $column): self
-    {
-        return $this->mutate(static function (self $query) use ($column): void {
-            $query->since = $column;
-        });
-    }
-
-    public function orderBy(string ...$columns): self
+    public function orderBy(string ...$columns): static
     {
         return $this->mutate(static function (self $query) use ($columns): void {
             $query->orders = [...$query->orders, ...array_values($columns)];
         });
     }
 
-    public function limit(int $rows): self
+    public function limit(int $rows): static
     {
         return $this->mutate(static function (self $query) use ($rows): void {
             $query->limit = $rows;
@@ -227,16 +204,130 @@ final class Query
     }
 
     /**
-     * @param  callable(self): self  $callback
+     * @param  callable(static): static  $callback
      */
-    public function pipe(callable $callback): self
+    public function pipe(callable $callback): static
     {
         return $callback($this);
+    }
+
+    /**
+     * @param  list<string>  $replacing  Columns identifying a row, so the build replaces rather than appends.
+     * @param  string|null  $since  Column whose high water mark bounds an incremental run.
+     */
+    public function incremental(array $replacing = [], ?string $since = null): IncrementalQuery
+    {
+        $query = $this->becomes(IncrementalQuery::class)->replacing(...$replacing);
+
+        return $since === null ? $query : $query->since($since);
+    }
+
+    public function microbatch(string $eventTime, BatchSize $batchSize, string $begin, int $lookback = 1): MicrobatchQuery
+    {
+        return $this->becomes(MicrobatchQuery::class)->batching($eventTime, $batchSize, $begin, $lookback);
+    }
+
+    /**
+     * @param  list<string>  $trackedBy  Columns identifying a row across its versions.
+     * @param  list<string>  $whenChanged  Columns watched for change. Empty watches every non key column.
+     */
+    public function snapshot(array $trackedBy, array $whenChanged = []): SnapshotQuery
+    {
+        return $this->becomes(SnapshotQuery::class)->tracking($trackedBy, $whenChanged);
+    }
+
+    public function view(): ViewQuery
+    {
+        return $this->becomes(ViewQuery::class);
+    }
+
+    public function ephemeral(): EphemeralQuery
+    {
+        return $this->becomes(EphemeralQuery::class);
     }
 
     public function compile(Context $context, Grammar $grammar, AnalyticsModel $model): Compiled
     {
         return $this->resolve($context, $grammar, $model)->render($context, $grammar);
+    }
+
+    /**
+     * Applied only on a run that appends to an existing incremental relation.
+     */
+    protected function applyIncremental(Grammar $grammar, AnalyticsModel $model): static
+    {
+        return $this;
+    }
+
+    /**
+     * @template TQuery of Query
+     *
+     * @param  class-string<TQuery>  $class
+     * @return TQuery
+     */
+    protected function becomes(string $class): Query
+    {
+        $query = new $class($this->model, $this->alias);
+
+        $query->joins = $this->joins;
+        $query->wheres = $this->wheres;
+        $query->bindings = $this->bindings;
+        $query->selects = $this->selects;
+        $query->dimensions = $this->dimensions;
+        $query->grains = $this->grains;
+        $query->measures = $this->measures;
+        $query->orders = $this->orders;
+        $query->limit = $this->limit;
+
+        return $query;
+    }
+
+    protected function dimensionFor(string $alias): ?Expression
+    {
+        foreach ($this->dimensions as $dimension) {
+            if ($dimension instanceof Aliased && $dimension->alias() === $alias) {
+                return $dimension->expression();
+            }
+        }
+
+        return null;
+    }
+
+    protected function expression(Expression|string $value, Grammar $grammar): string
+    {
+        return $value instanceof Expression ? $value->render($grammar) : $value;
+    }
+
+    /**
+     * @param  callable(static): void  $mutate
+     */
+    protected function mutate(callable $mutate): static
+    {
+        $clone = clone $this;
+
+        $mutate($clone);
+
+        return $clone;
+    }
+
+    /**
+     * The query as it applies to this run: incremental blocks folded in, and a microbatch
+     * model narrowed to the batch being built.
+     */
+    private function resolve(Context $context, Grammar $grammar, AnalyticsModel $model): static
+    {
+        $query = $model->isIncremental() ? $this->applyIncremental($grammar, $model) : $this;
+
+        $window = $context->batchWindow();
+        $eventTime = $model->eventTime();
+
+        if ($window !== null && $eventTime !== null) {
+            $query = $query
+                ->where($eventTime, '>=', $window->start->toDateTimeString())
+                ->where($eventTime, '<', $window->end->toDateTimeString());
+        }
+
+        return $query;
     }
 
     private function render(Context $context, Grammar $grammar): Compiled
@@ -273,63 +364,6 @@ final class Query
         }
 
         return new Compiled($sql, $this->bindings);
-    }
-
-    /**
-     * The query as it applies to this run: incremental blocks folded in, and a microbatch
-     * model narrowed to the batch being built.
-     */
-    private function resolve(Context $context, Grammar $grammar, AnalyticsModel $model): self
-    {
-        $query = $this;
-
-        if ($model->isIncremental()) {
-            foreach ($this->incrementally as $callback) {
-                $query = $callback($query);
-            }
-
-            if ($this->since !== null) {
-                $query = $query->whereRaw($this->watermark($grammar, $model, $this->since));
-            }
-        }
-
-        $window = $context->batchWindow();
-        $eventTime = $model->eventTime();
-
-        if ($window !== null && $eventTime !== null) {
-            $query = $query
-                ->where($eventTime, '>=', $window->start->toDateTimeString())
-                ->where($eventTime, '<', $window->end->toDateTimeString());
-        }
-
-        return $query->mutate(static function (self $resolved): void {
-            $resolved->incrementally = [];
-            $resolved->since = null;
-        });
-    }
-
-    private function watermark(Grammar $grammar, AnalyticsModel $model, string $column): string
-    {
-        $operator = $model->incrementalStrategy() === IncrementalStrategy::Append ? '>' : '>=';
-
-        return sprintf(
-            '%s %s (select max(%s) from %s)',
-            $this->expression($this->dimensionFor($column) ?? $column, $grammar),
-            $operator,
-            $column,
-            $model->getTable(),
-        );
-    }
-
-    private function dimensionFor(string $alias): ?Expression
-    {
-        foreach ($this->dimensions as $dimension) {
-            if ($dimension instanceof Aliased && $dimension->alias() === $alias) {
-                return $dimension->expression();
-            }
-        }
-
-        return null;
     }
 
     /**
@@ -383,11 +417,6 @@ final class Query
         return $list;
     }
 
-    private function expression(Expression|string $value, Grammar $grammar): string
-    {
-        return $value instanceof Expression ? $value->render($grammar) : $value;
-    }
-
     private function isGrouped(): bool
     {
         return $this->dimensions !== [] || $this->grains !== [];
@@ -396,7 +425,7 @@ final class Query
     /**
      * @param  class-string<Model>  $model
      */
-    private function addJoin(string $type, string $model, ?string $alias, ?string $first, ?string $second): self
+    private function addJoin(string $type, string $model, ?string $alias, ?string $first, ?string $second): static
     {
         return $this->mutate(static function (self $query) use ($type, $model, $alias, $first, $second): void {
             $query->joins[] = [
@@ -406,17 +435,5 @@ final class Query
                 'conditions' => $first !== null && $second !== null ? [[$first, $second]] : [],
             ];
         });
-    }
-
-    /**
-     * @param  callable(self): void  $mutate
-     */
-    private function mutate(callable $mutate): self
-    {
-        $clone = clone $this;
-
-        $mutate($clone);
-
-        return $clone;
     }
 }

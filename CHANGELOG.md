@@ -4,6 +4,7 @@
 
 ### Added
 
+- `ViewQuery`, `EphemeralQuery`, `IncrementalQuery`, `MicrobatchQuery` and `SnapshotQuery`. The declared return type of `computes()` is the materialization, and each subclass carries the configuration that materialization needs — `replacing`/`since`, event time and batch size, tracked and watched columns — so a fluent model overrides neither `materialization()` nor `uniqueKey()`, `eventTime()`, `batchSize()`, `begin()` or `checkColumns()`, and a setting that belongs to another materialization does not exist on the query at all.
 - `since()` and `whenIncremental()` on a fluent query, restricting an incremental run without the model writing the filter twice; `since()` compares with `>` when the model appends and `>=` when it replaces by key, and compares the dimension expression rather than its alias. A microbatch model is narrowed to the batch being built automatically, from `eventTime()`.
 - A fluent `Query` accepted by `computes()`, which derives `group by` from `per()` and `grain()`, binds `where()` values, registers dependencies from the model class passed to `from()` and `join()`, and refuses `select()` on a grouped query. Immutable: every method returns a new query.
 - `Analytics` trait and `AnalyticsModel` contract for defining analytics models as Eloquent models.

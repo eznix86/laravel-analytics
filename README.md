@@ -571,31 +571,58 @@ forget `ref()`.
 A `Query` is immutable: every method returns a new query, so a shared base can be handed to several
 models without one of them altering it.
 
-### Incremental and microbatch models
+### Materialization comes from the return type
+
+The declared return type of `computes()` is what says how a fluent model is persisted, and it carries
+the configuration that would otherwise be spread across overridden methods:
+
+| `computes()` returns | Materialization | Configured with |
+| --- | --- | --- |
+| `Query` | table | |
+| `ViewQuery` | view | `->view()` |
+| `EphemeralQuery` | ephemeral | `->ephemeral()` |
+| `IncrementalQuery` | incremental | `->incremental(replacing:, since:)` |
+| `MicrobatchQuery` | microbatch | `->microbatch($eventTime, $size, begin:)` |
+| `SnapshotQuery` | snapshot | `->snapshot(trackedBy:, whenChanged:)` |
+
+```php
+public function computes(): IncrementalQuery
+{
+    return $this->from(Event::class)
+        ->per(date_trunc('day', 'happened_at')->as('day'), 'name')
+        ->measure('total', 'count(*)')
+        ->incremental(replacing: ['day', 'name'], since: 'day');
+}
+```
+
+That model declares no `materialization()` and no `uniqueKey()`: both are read off the query. The
+return type is also what makes `since()` unavailable on a table query and `whenChanged()` unavailable
+on an incremental one — a wrong combination will not compile rather than being ignored at run time.
+
+A model that returns raw SQL keeps declaring `materialization()` and the rest as methods, and its
+`computes()` is never called to read configuration, because raw SQL may depend on a compilation state
+that only a real build has.
+
+### Incremental runs
 
 `since()` restricts an incremental run to rows past the high water mark of a column, and uses the
 dimension expression behind the column when there is one, because no driver accepts a select alias
-in a `where`:
-
-```php
-return $this->from(Event::class)
-    ->per(date_trunc('day', 'happened_at')->as('day'), 'name')
-    ->measure('total', 'count(*)')
-    ->since('day');
-```
+in a `where`.
 
 The comparison follows the incremental strategy: `>` when the model appends, so the boundary row is
-not duplicated, and `>=` when a unique key makes the build replace rows, so a row restated within the
-boundary period is rebuilt. Nothing is added on the build that creates the relation, or on a
+not duplicated, and `>=` when a replace key makes the build replace rows, so a row restated within
+the boundary period is rebuilt. Nothing is added on the build that creates the relation, or on a
 `--full-refresh`.
 
 `whenIncremental()` takes the general case, and is the fluent form of dbt's `is_incremental()` block:
 
 ```php
-->whenIncremental(fn (Query $query): Query => $query->whereRaw('id > (select max(id) from '.$this->getTable().')'))
+->whenIncremental(fn (IncrementalQuery $query): IncrementalQuery => $query->whereRaw(
+    'id > (select max(id) from '.$this->getTable().')',
+))
 ```
 
-A microbatch model needs neither: the window of the batch being built is applied from `eventTime()`,
+A microbatch model needs neither: the window of the batch being built is applied from its event time,
 as bound values, with no filter written in the model.
 
 ## Builder-backed models

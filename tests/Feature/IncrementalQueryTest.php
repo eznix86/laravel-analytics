@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Eznix86\LaravelAnalytics\Compilation\BatchWindow;
 use Eznix86\LaravelAnalytics\Compilation\Compiler;
 use Eznix86\LaravelAnalytics\Compilation\Context;
+use Eznix86\LaravelAnalytics\IncrementalQuery;
 use Eznix86\LaravelAnalytics\Query;
 use Eznix86\LaravelAnalytics\Tests\Fixtures\Fluent\Batched;
 use Eznix86\LaravelAnalytics\Tests\Fixtures\Fluent\Keyed;
@@ -97,8 +98,8 @@ it('leaves a microbatch model unfiltered when it is compiled outside a batch', f
 it('applies an incremental block only once the relation exists', function () {
     // Arrange
     $model = new Stream;
-    $query = Query::from(Order::class)->select('id')
-        ->whenIncremental(fn (Query $inner): Query => $inner->whereRaw('id > 100'));
+    $query = Query::from(Order::class)->select('id')->incremental()
+        ->whenIncremental(fn (IncrementalQuery $inner): IncrementalQuery => $inner->whereRaw('id > 100'));
     $compile = fn (): string => $query->compile(app(Context::class), $model->grammar(), $model)->sql;
 
     // Act
