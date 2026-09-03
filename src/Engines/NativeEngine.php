@@ -21,6 +21,7 @@ use Illuminate\Database\Connection;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
+use PDO;
 use Throwable;
 
 class NativeEngine
@@ -188,21 +189,45 @@ class NativeEngine
         $source = $this->sourceOf($node);
         $size = $model->importChunk();
 
-        $buffer = [];
-        $written = 0;
+        return $this->streaming($source, function () use ($source, $sql, $bindings, $target, $table, $key, $size): int {
+            $buffer = [];
+            $written = 0;
 
-        foreach ($source->cursor($sql, $bindings) as $row) {
-            $buffer[] = (array) $row;
+            foreach ($source->cursor($sql, $bindings) as $row) {
+                $buffer[] = (array) $row;
 
-            if (count($buffer) < $size) {
-                continue;
+                if (count($buffer) < $size) {
+                    continue;
+                }
+
+                $written += $this->write($target, $table, $buffer, $key);
+                $buffer = [];
             }
 
-            $written += $this->write($target, $table, $buffer, $key);
-            $buffer = [];
+            return $written + ($buffer === [] ? 0 : $this->write($target, $table, $buffer, $key));
+        });
+    }
+
+    /**
+     * MySQL buffers a whole result set in PHP memory unless told not to, which makes the
+     * cost of an import the size of the source rather than the size of a chunk.
+     *
+     * @param  callable(): int  $read
+     */
+    protected function streaming(Connection $source, callable $read): int
+    {
+        if (! in_array($source->getDriverName(), ['mysql', 'mariadb'], true)) {
+            return $read();
         }
 
-        return $written + ($buffer === [] ? 0 : $this->write($target, $table, $buffer, $key));
+        $pdo = $source->getPdo();
+        $pdo->setAttribute(PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, false);
+
+        try {
+            return $read();
+        } finally {
+            $pdo->setAttribute(PDO::MYSQL_ATTR_USE_BUFFERED_QUERY, true);
+        }
     }
 
     /**
