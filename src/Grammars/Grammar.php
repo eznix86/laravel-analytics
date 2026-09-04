@@ -92,6 +92,29 @@ abstract class Grammar
     }
 
     /**
+     * A driver that can rename several relations in one statement swaps atomically on
+     * its own. Everything else needs the renames wrapped in a transaction.
+     *
+     * @param  list<array{string, string}>  $renames
+     * @return list<string>
+     */
+    public function compileRenameTables(array $renames): array
+    {
+        return array_map(
+            fn (array $rename): string => $this->compileRenameTable($rename[0], $rename[1]),
+            $renames,
+        );
+    }
+
+    /**
+     * Whether replacing a view leaves no moment where it does not exist.
+     */
+    public function replacesViewsAtomically(): bool
+    {
+        return false;
+    }
+
+    /**
      * @param  list<string>  $columns
      */
     public function compileCreateIndex(string $table, array $columns, string $name): string

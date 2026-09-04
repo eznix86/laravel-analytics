@@ -37,6 +37,16 @@ class PostgresGrammar extends Grammar
         return "string_agg({$column}::text, '{$delimiter}')";
     }
 
+    public function compileCreateView(string $view, string $sql): string
+    {
+        return "create or replace view {$view} as {$sql}";
+    }
+
+    public function replacesViewsAtomically(): bool
+    {
+        return true;
+    }
+
     public function compileNotEqual(string $left, string $right): string
     {
         return "{$left} is distinct from {$right}";
