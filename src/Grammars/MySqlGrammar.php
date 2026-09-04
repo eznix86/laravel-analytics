@@ -70,6 +70,33 @@ class MySqlGrammar extends Grammar
         ];
     }
 
+    /**
+     * MySQL renames every relation in the list in one statement, which no other
+     * driver here does, so the swap needs no transaction around it.
+     *
+     * @param  list<array{string, string}>  $renames
+     * @return list<string>
+     */
+    public function compileRenameTables(array $renames): array
+    {
+        $pairs = implode(', ', array_map(
+            static fn (array $rename): string => "{$rename[0]} to {$rename[1]}",
+            $renames,
+        ));
+
+        return ["rename table {$pairs}"];
+    }
+
+    public function compileCreateView(string $view, string $sql): string
+    {
+        return "create or replace view {$view} as {$sql}";
+    }
+
+    public function replacesViewsAtomically(): bool
+    {
+        return true;
+    }
+
     public function supportsTransactionalDdl(): bool
     {
         return false;

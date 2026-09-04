@@ -19,6 +19,7 @@ use Eznix86\LaravelAnalytics\RunStatus;
 use Eznix86\LaravelAnalytics\SchemaChange;
 use Illuminate\Database\Connection;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Str;
 use PDO;
@@ -75,6 +76,11 @@ class NativeEngine
         return (int) round((hrtime(true) - $startedAt) / 1_000_000);
     }
 
+    /**
+     * PostgreSQL refuses to replace a view whose columns changed name, type or order,
+     * so that one case falls back to a drop inside a transaction, where a failed create
+     * rolls the drop back rather than leaving nothing behind.
+     */
     protected function replaceView(Node $node): ?int
     {
         $model = $node->newModel();
@@ -87,8 +93,21 @@ class NativeEngine
             $connection->prepareBindings($node->compiled->bindings),
         );
 
-        $connection->statement($grammar->compileDropView($view));
-        $connection->statement($grammar->compileCreateView($view, $sql));
+        if (! $grammar->replacesViewsAtomically()) {
+            $connection->statement($grammar->compileDropView($view));
+            $connection->statement($grammar->compileCreateView($view, $sql));
+
+            return null;
+        }
+
+        try {
+            $connection->statement($grammar->compileCreateView($view, $sql));
+        } catch (QueryException) {
+            $connection->transaction(function () use ($connection, $grammar, $view, $sql): void {
+                $connection->statement($grammar->compileDropView($view));
+                $connection->statement($grammar->compileCreateView($view, $sql));
+            });
+        }
 
         return null;
     }
@@ -118,15 +137,19 @@ class NativeEngine
 
         $existed = $connection->getSchemaBuilder()->hasTable($table);
 
-        $swap = function () use ($connection, $grammar, $existed, $table, $temporary, $name, $replaced): void {
-            if ($existed) {
-                $connection->statement($grammar->compileRenameTable($table, $replaced));
-            }
+        $renames = $existed
+            ? [[$table, $replaced], [$temporary, $name]]
+            : [[$temporary, $name]];
 
-            $connection->statement($grammar->compileRenameTable($temporary, $name));
+        $statements = $grammar->compileRenameTables($renames);
+
+        $swap = function () use ($connection, $statements): void {
+            foreach ($statements as $statement) {
+                $connection->statement($statement);
+            }
         };
 
-        $grammar->supportsTransactionalDdl()
+        count($statements) > 1 && $grammar->supportsTransactionalDdl()
             ? $connection->transaction($swap)
             : $swap();
 
