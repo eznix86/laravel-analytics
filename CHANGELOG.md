@@ -1,6 +1,17 @@
 # Release Notes
 
-## [Unreleased](https://github.com/eznix86/laravel-analytics/compare/v0.2.1...HEAD)
+## [Unreleased](https://github.com/eznix86/laravel-analytics/compare/v0.2.2...HEAD)
+
+## [v0.2.2](https://github.com/eznix86/laravel-analytics/compare/v0.2.1...v0.2.2) - 2026-09-04
+
+<!-- Release notes generated using configuration in .github/release.yml at v0.2.2 -->
+### What's Changed
+
+#### Other Changes
+
+* Swap views and MySQL tables atomically by @eznix86 in https://github.com/eznix86/laravel-analytics/pull/4
+
+**Full Changelog**: https://github.com/eznix86/laravel-analytics/compare/v0.2.1...v0.2.2
 
 ## [v0.2.1](https://github.com/eznix86/laravel-analytics/compare/v0.2.0...v0.2.1) - 2026-09-03
 
