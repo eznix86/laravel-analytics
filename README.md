@@ -28,8 +28,6 @@ Analytics logic often gets duplicated across dashboards, reports, jobs, and ad h
 * **Scale beyond full rebuilds.** Incremental models, microbatches, snapshots, and imports handle larger and more complex workloads.
 * **Test your data.** Declare expectations about your analytics models and run them from Artisan or your test suite.
 
-No Python. No `profiles.yml`. No separate analytics project. No second database configuration.
-
 ## Quick Start
 
 Create an analytics model:
