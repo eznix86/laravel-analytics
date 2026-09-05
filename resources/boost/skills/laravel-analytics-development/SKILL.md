@@ -91,7 +91,15 @@ public function computes(): IncrementalQuery
 
 - Do not also override `materialization()`, `uniqueKey()`, `eventTime()`, `batchSize()`, `begin()`, `lookback()` or `checkColumns()`. They are read off the query.
 - `since('column')` adds the high water mark filter. It uses `>` when the model appends and `>=` when a replace key makes it replace. If the column is a dimension it compares the expression, not the alias.
-- `whenIncremental(fn (IncrementalQuery $q) => ...)` covers anything `since()` cannot express.
+- `whenIncremental()` covers anything `since()` cannot express. Use a closure, not an arrow function, so the heredoc has somewhere to sit:
+
+```php
+->whenIncremental(function (IncrementalQuery $query): IncrementalQuery {
+    return $query->whereRaw(<<<SQL
+        id > (select max(id) from {$this->getTable()})
+    SQL);
+})
+```
 - A microbatch model needs no filter. The batch window is applied from its event time column.
 - Neither filter is added on the first build or under `--full-refresh`.
 - Set `onSchemaChange()` when an incremental model's columns will drift.
