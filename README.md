@@ -365,13 +365,15 @@ When `since()` references a dimension, the comparison is made against the dimens
 Use `whenIncremental()` when `since()` is not sufficient:
 
 ```php
-->whenIncremental(
-    fn (IncrementalQuery $query): IncrementalQuery =>
-        $query->whereRaw(
-            'id > (select max(id) from '.$this->getTable().')'
-        )
-)
+->whenIncremental(function (IncrementalQuery $query): IncrementalQuery {
+    return $query->whereRaw(<<<SQL
+        id > (select max(id) from {$this->getTable()})
+    SQL);
+})
 ```
+
+Use a closure rather than an arrow function here, so the heredoc has somewhere to sit. `$this` is
+still the model inside it, which is what `getTable()` needs.
 
 This is the fluent equivalent of dbt's `is_incremental()` block.
 
