@@ -98,6 +98,20 @@ public function computes(): IncrementalQuery
 - `appendOnly:` on an import is a claim that the source only ever gains rows. It reads past the highest value already stored, so a deleted row stays in the copy and an update below that value is missed. Drop it to catch updates, or schedule `--full-refresh` to catch both.
 - An import copies rows from the connection its source lives on onto the model's own connection, which is the only model allowed to cross a connection. Write a migration for the target table first, with a unique index on the replace key. The import never creates the table, so the column types stay the ones you chose. Its source must be a plain Eloquent model, not an analytics model on the other connection.
 - A model that returns raw SQL keeps `materialization()` and the rest as methods, and writes its own filter with `isIncremental()` and its own batch predicate with `$this->batchWindow()`.
+- Write raw SQL as a heredoc opened with `<<<SQL`, not `<<<'SQL'`, and interpolate `ref()` in place:
+
+```php
+public function computes(): string
+{
+    return <<<SQL
+        select store_id, sqft
+        from {$this->ref(Store::class)}
+        where is_active
+    SQL;
+}
+```
+
+Never build raw SQL with `.` concatenation or `sprintf`. Concatenation loses the SQL layout and a missing trailing space breaks on one driver only. `sprintf` treats `%` as a format specifier, so an ordinary `like '%sale%'` throws `ValueError: Missing padding character`. The same applies to a `whereRaw()` fragment inside a fluent query.
 
 ### 4. Build and schedule
 
@@ -200,6 +214,7 @@ Read before executing:
 
 - writing to an analytics model; they are rebuilt from scratch on every sync and writes throw
 - querying an `Ephemeral` model directly; it has no relation and is inlined into its consumers
+- building raw SQL with `.` concatenation or `sprintf`; use a heredoc and interpolate `ref()`
 - calling `computes()` directly on a raw SQL model; use `compile()` so refs and CTEs resolve
 - referencing a model on another connection; import the source onto this one first with an import model
 - omitting `indexes()` on a large table and losing index coverage after every rebuild

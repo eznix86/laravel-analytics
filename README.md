@@ -165,9 +165,9 @@ Because your Eloquent models already describe where source data lives, there is 
 Inside raw SQL, use `ref()` to reference another model:
 
 ```php
-->whereRaw(
-    'id in (select order_id from '.$this->ref(Refund::class).')'
-)
+->whereRaw(<<<SQL
+    id in (select order_id from {$this->ref(Refund::class)})
+SQL)
 ```
 
 The referenced model becomes part of the dependency graph and `ref()` resolves to the correct relation name during compilation.
@@ -1150,6 +1150,8 @@ The fluent API is the recommended starting point, but `computes()` can also retu
 
 Raw SQL is useful for queries that do not have a convenient fluent representation, such as complex `CASE` expressions or lateral joins.
 
+Use a heredoc and interpolate `ref()` where the relation belongs:
+
 ```php
 public function materialization(): Materialization
 {
@@ -1158,12 +1160,23 @@ public function materialization(): Materialization
 
 public function computes(): string
 {
-    return 'select store_id, '
-        ."case when country in ('MU', 'ZA') "
-        ."then 'AFRICA' else 'OTHER' end as country_group "
-        .'from '.$this->ref(Store::class);
+    return <<<SQL
+        select
+            store_id,
+            case when country in ('MU', 'ZA') then 'AFRICA' else 'OTHER' end as country_group
+        from {$this->ref(Store::class)}
+    SQL;
 }
 ```
+
+Open it with `<<<SQL`, not `<<<'SQL'`. The quoted form disables interpolation.
+
+Prefer this over concatenation or `sprintf`.
+
+Concatenation loses the SQL layout, and a missing trailing space produces an error on one driver
+only. `sprintf` is worse: `%` is a format specifier, so an ordinary `like '%sale%'` throws
+`ValueError: Missing padding character` unless every `%` is doubled. A heredoc has no placeholders to
+miscount and no characters to escape, and editors highlight the SQL inside it.
 
 Raw SQL models declare materialization and other applicable configuration through methods such as:
 
